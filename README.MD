@@ -1,4 +1,7 @@
-![logo](https://repository-images.githubusercontent.com/1104319221/78588b57-8941-45ce-9744-2f56128c0b84)
+<p align="center">
+  <img src="https://repository-images.githubusercontent.com/1104319221/78588b57-8941-45ce-9744-2f56128c0b84" alt="whim logo"/>
+</p>
+
 # whim
 whim is a C99 single-header library which stands for Window Handling & Input Management library. Its primary purpose is to generalize window and graphics context creation, whilst also being as lightweight as possible.
 
