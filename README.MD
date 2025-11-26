@@ -1,5 +1,5 @@
 # whim
-WHIM is a C99 single-header library which stands for Window Handling & Input Management library. Its primary purpose is to generalize window and graphics creation, whilst also being as lightweight as possible.
+whim is a C99 single-header library which stands for Window Handling & Input Management library. Its primary purpose is to generalize window and graphics context creation, whilst also being as lightweight as possible.
 
 ## Getting started.
 
@@ -43,7 +43,10 @@ int main(void) {
 
 ## Feedback
 
-whim is in an early stage of development, as of now it supports X11 through libxcb and it doesn't support any graphics context out of the box. Vulkan seems to work though.
+whim is in an early stage of development, as of now it supports X11 through libxcb and it doesn't support any graphics context out of the box. 
+
+Vulkan seems to work though.
+
 C++ is not supported at the moment.
 
 PRs are welcome!
