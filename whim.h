@@ -149,12 +149,15 @@ void whimWinSetSizeLimits(WhimWin *window, WhimVec2 min_size, WhimVec2 max_size)
 void whimWinSetClearColor(WhimWin *window, WhimColor color);
 whim_bool whimWinShouldClose(WhimWin *window);
 
-
 #ifdef WHIM_IMPLEMENTATION
 /* X11 backend */
 #include <unistd.h>
 #include <errno.h>
 #include <dlfcn.h>
+
+// NOTE: WHIM_API will be used in the future, for now it doesn't do anything
+#define WHIM_API(func, postfix) func
+#define WHIM_UTIL static inline
 
 #ifdef __has_feature
 #    if(__has_feature(address_sanitizer) || __has_feature(thread_sanitizer))
@@ -207,7 +210,7 @@ static struct WhimX11State {
 } x11;
 
 
-static inline void x11String8Req(whim_u8 req, char *str, whim_u32 str_len)
+WHIM_UTIL void x11String8Req(whim_u8 req, char *str, whim_u32 str_len)
 {
     WHIM_32BIT_PAYLOAD(2) buffer = {{req}}; buffer.as_16[1] = sizeof(buffer.req_size) + (str_len + 3) / 4, buffer.as_16[2] = str_len;
 
@@ -217,7 +220,7 @@ static inline void x11String8Req(whim_u8 req, char *str, whim_u32 str_len)
 #define X11_INTERN_ATOM(str) x11String8Req(16, str, sizeof(str) - 1)
 #define X11_QUERY_EXT(str) x11String8Req(98, str, sizeof(str) - 1)
 
-static whim_u32* x11ScreenOfDisplay(void *con, int screen)
+WHIM_UTIL whim_u32* x11ScreenOfDisplay(void *con, int screen)
 {
     struct xcb_iterator {whim_u32 *data; int rem; int index;} iter;
     void* (*const getSetup)(void*) = dlsym(x11.handle, "xcb_get_setup");
@@ -232,7 +235,7 @@ static whim_u32* x11ScreenOfDisplay(void *con, int screen)
     return 0;
 }
 
-static inline void x11RoundtripAtoms(void)
+WHIM_UTIL void x11RoundtripAtoms(void)
 {
     WHIM_8BIT_PAYLOAD(32) receiver;
     whim_u32 *atoms[] = {&x11.atoms.wm_protocols, &x11.atoms.close, &x11.atoms.name, &x11.atoms.utf8_str};
@@ -243,7 +246,7 @@ static inline void x11RoundtripAtoms(void)
     }
 }
 
-static void x11RoundtripXkb(void)
+WHIM_UTIL void x11RoundtripXkb(void)
 {
     enum {XKB_AUTOREPEAT = 1, XKB_USE, XKB_EXT, XKB_MAJOR = 1, XKB_MINOR = 0};
     WHIM_8BIT_PAYLOAD(32) receiver;
@@ -279,7 +282,7 @@ static void x11RoundtripXkb(void)
     }
 }
 
-whim_bool whimInit(enum WhimInitFlags flags)
+WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
 {
     if(!(x11.handle = dlopen("libxcb.so.1", RTLD_LAZY | RTLD_LOCAL)))
         goto LIBRARY_FAIL;
@@ -330,7 +333,7 @@ LIBRARY_FAIL:
     return WHIM_FALSE;
 }
 
-static void x11CreateWindow(WhimWin *win, whim_u32 parent, whim_u32 clear_color)
+WHIM_UTIL void x11CreateWindow(WhimWin *win, whim_u32 parent, whim_u32 clear_color)
 {
     enum { WIN_BACKGROUND = 0x00000002, WIN_EVENTS = 0x00000800,
            EVENT_KEY_PRESS = 1, EVENT_KEY_RELEASE = 2};
@@ -347,13 +350,13 @@ static void x11CreateWindow(WhimWin *win, whim_u32 parent, whim_u32 clear_color)
     WHIM_SEND_REQUEST(&buffer, sizeof(buffer.as_8));
 }
 
-static void x11MapWindow(WhimWin* win, whim_bool should_map)
+WHIM_UTIL void x11MapWindow(WhimWin* win, whim_bool should_map)
 {
     WHIM_32BIT_PAYLOAD(2) buffer = {{should_map ? 8 : 10}}; buffer.as_16[1] = 2; buffer.as_32[1] = win->window_id;
     WHIM_SEND_REQUEST(&buffer, sizeof(buffer.as_8));
 }
 
-static inline void x11ReadjustWindow(WhimWin* win)
+WHIM_UTIL void x11ReadjustWindow(WhimWin* win)
 {
     WHIM_32BIT_PAYLOAD(7) buffer = {{12}}; // ConfigureWindow
     buffer.as_16[1] = sizeof(buffer.req_size);
@@ -364,7 +367,7 @@ static inline void x11ReadjustWindow(WhimWin* win)
     WHIM_SEND_REQUEST(&buffer, sizeof(buffer.as_8));
 }
 
-static inline void x11ChangeProperty(WhimWin* win, whim_u32 property, whim_u32 type, whim_u8 format, whim_u32 data_length, const void* data)
+WHIM_UTIL void x11ChangeProperty(WhimWin* win, whim_u32 property, whim_u32 type, whim_u8 format, whim_u32 data_length, const void* data)
 {
     whim_u32 data_bytes = data_length * format / 8;
     WHIM_32BIT_PAYLOAD(6) buffer = {{18}};
@@ -380,7 +383,7 @@ static inline void x11ChangeProperty(WhimWin* win, whim_u32 property, whim_u32 t
     x11.sendRequest(x11.connection, 2, vecs, &(struct whim_xcb_req_t){4, 0, 0, 1});
 }
 
-WhimWin* whimWinCreate(WhimRect rect, const char *title, WhimColor clear_color, enum WhimWinFlags flags)
+WHIM_API(WhimWin* whimWinCreate, X11)(WhimRect rect, const char *title, WhimColor clear_color, enum WhimWinFlags flags)
 {
     WhimWin* win = WHIM_MALLOC(sizeof(*win));
     if(!win) return 0;
@@ -400,26 +403,26 @@ WhimWin* whimWinCreate(WhimRect rect, const char *title, WhimColor clear_color, 
     return win;
 }
 
-void whimWinSetTitle(WhimWin *window, const char *title) {
+WHIM_API(void whimWinSetTitle, X11)(WhimWin *window, const char *title) {
     x11ChangeProperty(window, x11.atoms.name, x11.atoms.utf8_str, 8, WHIM_STRLEN(title), title);
     x11.flush(x11.connection);
 }
 
-void whimWinDestroy(WhimWin *window)
+WHIM_API(void whimWinDestroy, X11)(WhimWin *window)
 {
     WHIM_32BIT_PAYLOAD(2) buffer = {{4}}; buffer.as_16[1] = 2; buffer.as_32[1] = window->window_id;
     WHIM_SEND_REQUEST(&buffer, sizeof(buffer.as_8));
     WHIM_FREE(window);
 }
 
-void whimDeinit(void)
+WHIM_API(void whimDeinit, X11)(void)
 {
     x11.disconnect(x11.connection);
     dlclose(x11.handle);
 }
 
 union WhimPayloadReceiver { whim_u8 *as_8; whim_u16 *as_16; whim_u32 *as_32; };
-static void x11ParseEvent(union WhimPayloadReceiver receiver, WhimEvent *event)
+WHIM_UTIL void x11ParseEvent(union WhimPayloadReceiver receiver, WhimEvent *event)
 {
     enum {KEY_PRESS = 2, KEY_RELEASE = 3, CLIENT_MESSAGE = 33};
     switch(receiver.as_8[0] & (whim_u8)~0x80) {
@@ -436,34 +439,36 @@ static void x11ParseEvent(union WhimPayloadReceiver receiver, WhimEvent *event)
     }
 }
 
-void whimPollEvents(WhimEvent *event)
+WHIM_API(void whimPollEvents, X11)(WhimEvent *event)
 {
     WHIM_ASSERT(event, "Invalid event");
 
     /* NOTICE: WHIM assumes that xcb events have the same layout as the payload, technically this breaks strict aliasing */
-    void* queued_event = x11.checkEventQueue(x11.connection);
-    if(queued_event) {
-        x11ParseEvent((union WhimPayloadReceiver){(whim_u8*)queued_event}, event);
-        x11.free(queued_event);
+    WHIM_8BIT_PAYLOAD(32) receiver;
+    union WhimPayloadReceiver x11_event = {(whim_u8*)x11.checkEventQueue(x11.connection)};
+
+    if(x11_event.as_8) {
+        x11ParseEvent(x11_event, event);
+        x11.free(x11_event.as_8);
         return;
     }
 
-    WHIM_8BIT_PAYLOAD(32) receiver;
     int bytes_read = read(x11.fd, &receiver, sizeof(receiver.as_8));
     if(bytes_read <= 0) {
-        if(bytes_read == 0)
-            WHIM_ASSERT(0, "TODO: Handle connection close");
-        if(errno != EAGAIN)
-            WHIM_ASSERT(0, "TODO: Handle read errors");
+        WHIM_ASSERT(bytes_read != 0, "TODO: Handle connection close");
+        WHIM_ASSERT(errno == EAGAIN, "TODO: Handle read errors");
 
         event->type = WHIM_EVENT_NONE;
         return;
     }
 
+    //if(receiver.as_8[0] == 0) printf("Error happened: %d \n", receiver.as_8[1]);
+
     WHIM_ASSERT(receiver.as_8[0] != 0, "TODO: Create proper error handling");
     WHIM_ASSERT(receiver.as_8[0] != 1, "TODO: How do even handle replies here?");
 
-    x11ParseEvent((union WhimPayloadReceiver){receiver.as_8}, event);
+    x11_event.as_8 = receiver.as_8;
+    x11ParseEvent(x11_event, event);
 }
 #endif
 
