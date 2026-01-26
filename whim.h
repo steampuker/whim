@@ -1,29 +1,4 @@
-/*
-This is free and unencumbered software released into the public domain.
-
-Anyone is free to copy, modify, publish, use, compile, sell, or
-distribute this software, either in source code form or as a compiled
-binary, for any purpose, commercial or non-commercial, and by any
-means.
-
-In jurisdictions that recognize copyright laws, the author or authors
-of this software dedicate any and all copyright interest in the
-software to the public domain. We make this dedication for the benefit
-of the public at large and to the detriment of our heirs and
-successors. We intend this dedication to be an overt act of
-relinquishment in perpetuity of all present and future rights to this
-software under copyright law.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
-
-For more information, please refer to <https://unlicense.org>
-*/
+/* See the end of file for license information. */
 
 #ifndef WHIM_H
 #define WHIM_H
@@ -175,14 +150,13 @@ whim_bool whimWinShouldClose(WhimWin *window);
 #    define WHIM_ANONYMIZE(x) x WHIM_CONCAT(WhimAnonymous, __LINE__)
 #endif
 
-struct whim_xcb_iovec { void* base; int len; };
-struct whim_xcb_req_t { size_t count; void *ext; whim_u8 opcode, isvoid; };
+struct whim_xcb__iovec { void* base; int len; };
+struct whim_xcb__req_t { size_t count; void *ext; whim_u8 opcode, isvoid; };
 
-#define WHIM_8BIT_PAYLOAD(N) WHIM_ANONYMIZE(union) { whim_u8 as_8[N]; whim_u16 as_16[(N / 2) | 1]; whim_u32 as_32[(N / 4) | 1]; char req_size[(N / 4) | 1]; }
-#define WHIM_16BIT_PAYLOAD(N) WHIM_ANONYMIZE(union) { whim_u8 as_8[N * 2]; whim_u16 as_16[N]; whim_u32 as_32[(N / 2) | 1]; char req_size[(N / 2) | 1]; }
-#define WHIM_32BIT_PAYLOAD(N) WHIM_ANONYMIZE(union) { whim_u8 as_8[N * 4]; whim_u16 as_16[N * 2]; whim_u32 as_32[N]; char req_size[N]; }
+typedef union { whim_u8 as_8[4]; whim_u16 as_16[2]; whim_u32 as_32; } WhimPayload;
+#define PAYLOAD_SIZE(x) (sizeof(x) / sizeof(WhimPayload))
 
-#define WHIM_SEND_REQUEST(payload, payload_size) x11.sendRequest(x11.connection, 2, (struct whim_xcb_iovec[2]){{payload, payload_size}}, &(struct whim_xcb_req_t){1, 0, 0, 1});
+#define WHIM_SEND_REQUEST(payload, payload_size) x11.sendRequest(x11.connection, 2, (struct whim_xcb__iovec[2]){{payload, payload_size}}, (struct whim_xcb__req_t[1]){1, 0, 0, 1});
 
 struct WhimWin {
     whim_u32 window_id;
@@ -193,7 +167,7 @@ static struct WhimX11State {
     void *handle;
     void (*disconnect)(void*);
     whim_u32 (*generateID)(void*);
-    int (*sendRequest)(void*, int, struct whim_xcb_iovec*, const struct whim_xcb_req_t*);
+    int (*sendRequest)(void*, int, struct whim_xcb__iovec*, const struct whim_xcb__req_t*);
     void* (*checkEventQueue)(void*);
     void* (*getReply)(void*, unsigned int, void**);
     void (*free)(void*);
@@ -209,13 +183,12 @@ static struct WhimX11State {
     whim_u32 xkb_opcode;
 } x11;
 
-
 WHIM_UTIL void x11String8Req(whim_u8 req, char *str, whim_u32 str_len)
 {
-    WHIM_32BIT_PAYLOAD(2) buffer = {{req}}; buffer.as_16[1] = sizeof(buffer.req_size) + (str_len + 3) / 4, buffer.as_16[2] = str_len;
+    WhimPayload buffer[2] = {{req}}; buffer[0].as_16[1] = PAYLOAD_SIZE(buffer) + (str_len + 3) / 4, buffer[1].as_16[0] = str_len;
 
-    struct whim_xcb_iovec vecs[4] = {{&buffer, sizeof(buffer.as_8)}, {0}, {str, str_len}, {&buffer, -str_len & 3}};
-    x11.sendRequest(x11.connection, 2, vecs, &(struct whim_xcb_req_t){4, 0, 0, 1});
+    struct whim_xcb__iovec vecs[4] = {{&buffer, sizeof(buffer)}, {0}, {str, str_len}, {&buffer, -str_len & 3}};
+    x11.sendRequest(x11.connection, 2, vecs, (struct whim_xcb__req_t[1]){4, 0, 0, 1});
 }
 #define X11_INTERN_ATOM(str) x11String8Req(16, str, sizeof(str) - 1)
 #define X11_QUERY_EXT(str) x11String8Req(98, str, sizeof(str) - 1)
@@ -237,45 +210,46 @@ WHIM_UTIL whim_u32* x11ScreenOfDisplay(void *con, int screen)
 
 WHIM_UTIL void x11RoundtripAtoms(void)
 {
-    WHIM_8BIT_PAYLOAD(32) receiver;
+    WhimPayload receiver[8];
     whim_u32 *atoms[] = {&x11.atoms.wm_protocols, &x11.atoms.close, &x11.atoms.name, &x11.atoms.utf8_str};
 
     for(size_t i = 0; i < sizeof(atoms) / sizeof(*atoms);) {
-        if(read(x11.fd, &receiver, sizeof(receiver.as_8)) <= 0) continue;
-        *atoms[i++] = receiver.as_32[2];
+        if(read(x11.fd, &receiver, sizeof(receiver)) <= 0) continue;
+        *atoms[i++] = receiver[2].as_32;
     }
 }
 
 WHIM_UTIL void x11RoundtripXkb(void)
 {
     enum {XKB_AUTOREPEAT = 1, XKB_USE, XKB_EXT, XKB_MAJOR = 1, XKB_MINOR = 0};
-    WHIM_8BIT_PAYLOAD(32) receiver;
+    WhimPayload receiver[8];
 
     for(int stage = XKB_EXT; stage > 0;) {
-        if(read(x11.fd, &receiver, sizeof(receiver.as_8)) <= 0) continue;
+        if(read(x11.fd, &receiver, sizeof(receiver)) <= 0) continue;
         switch(stage) {
-        case XKB_EXT:
-            WHIM_ASSERT(receiver.as_8[0] && receiver.as_8[8], "XKB is not supported");
-            x11.xkb_opcode = receiver.as_8[9];
+        case XKB_EXT: {
+            WHIM_ASSERT(receiver[0].as_8[0] && receiver[2].as_8[0], "XKB is not supported");
+            x11.xkb_opcode = receiver[2].as_8[1];
 
-            WHIM_32BIT_PAYLOAD(2) buffer  = {{x11.xkb_opcode, 0}}; buffer.as_16[1] = sizeof(buffer.req_size); // XkbUseExtension
-            WHIM_32BIT_PAYLOAD(7) buffer2 = {{x11.xkb_opcode, 21}}; buffer2.as_16[1] = sizeof(buffer2.req_size); // XkbSetAutorepeat
+            WhimPayload buffer[2]  = {{x11.xkb_opcode, 0}}; buffer[0].as_16[1] = PAYLOAD_SIZE(buffer); // XkbUseExtension
+            WhimPayload buffer2[7] = {{x11.xkb_opcode, 21}}; buffer2[0].as_16[1] = PAYLOAD_SIZE(buffer2); // XkbSetAutorepeat
 
-            buffer.as_16[2] = XKB_MAJOR, buffer.as_16[3] = XKB_MINOR;
-            buffer2.as_16[2] = 256, buffer2.as_32[2] = 1, buffer2.as_32[3] = 1;
+            buffer[1].as_16[0] = XKB_MAJOR, buffer[1].as_16[1] = XKB_MINOR;
+            buffer2[1].as_16[0] = 256, buffer2[2].as_32 = 1, buffer2[3].as_32 = 1;
 
-            WHIM_SEND_REQUEST(&buffer, sizeof(buffer.as_8));
-            WHIM_SEND_REQUEST(&buffer2, sizeof(buffer2.as_8));
+            WHIM_SEND_REQUEST(&buffer, sizeof(buffer));
+            WHIM_SEND_REQUEST(&buffer2, sizeof(buffer2));
 
             x11.flush(x11.connection);
             --stage;
             continue;
+        }
         case XKB_USE:
-            WHIM_ASSERT(receiver.as_8[1], "Can't use XKB, invalid version?");
+            WHIM_ASSERT(receiver[0].as_8[1], "Can't use XKB, invalid version?");
             --stage;
             continue;
         case XKB_AUTOREPEAT:
-            WHIM_ASSERT(receiver.as_32[2] & (1 << 1), "Detectable autorepeat is not supported");
+            WHIM_ASSERT(receiver[2].as_32 & (1 << 1), "Detectable autorepeat is not supported");
         }
 
         break;
@@ -337,50 +311,50 @@ WHIM_UTIL void x11CreateWindow(WhimWin *win, whim_u32 parent, whim_u32 clear_col
 {
     enum { WIN_BACKGROUND = 0x00000002, WIN_EVENTS = 0x00000800,
            EVENT_KEY_PRESS = 1, EVENT_KEY_RELEASE = 2};
-    WHIM_32BIT_PAYLOAD(10) buffer = {{1}};
-    buffer.as_16[1] = sizeof(buffer.req_size);
-    buffer.as_32[1] = win->window_id;
+    WhimPayload buffer[10] = {{1}};
+    buffer->as_16[1] = PAYLOAD_SIZE(buffer);
+    buffer[1].as_32 = win->window_id;
 
-    buffer.as_32[2] = parent;
-    buffer.as_16[6 + 3] = buffer.as_16[6 + 2] = 1;
-    buffer.as_32[7] = WIN_BACKGROUND | WIN_EVENTS;
-    buffer.as_32[8] = clear_color;
-    buffer.as_32[9] = EVENT_KEY_PRESS | EVENT_KEY_RELEASE;
+    buffer[2].as_32 = parent;
+    buffer[4].as_16[1] = buffer[4].as_16[0] = 1;
+    buffer[7].as_32 = WIN_BACKGROUND | WIN_EVENTS;
+    buffer[8].as_32 = clear_color;
+    buffer[9].as_32 = EVENT_KEY_PRESS | EVENT_KEY_RELEASE;
 
-    WHIM_SEND_REQUEST(&buffer, sizeof(buffer.as_8));
+    WHIM_SEND_REQUEST(&buffer, sizeof(buffer));
 }
 
 WHIM_UTIL void x11MapWindow(WhimWin* win, whim_bool should_map)
 {
-    WHIM_32BIT_PAYLOAD(2) buffer = {{should_map ? 8 : 10}}; buffer.as_16[1] = 2; buffer.as_32[1] = win->window_id;
-    WHIM_SEND_REQUEST(&buffer, sizeof(buffer.as_8));
+    WhimPayload buffer[2] = {{should_map ? 8 : 10}}; buffer->as_16[1] = PAYLOAD_SIZE(buffer); buffer[1].as_32 = win->window_id;
+    WHIM_SEND_REQUEST(&buffer, sizeof(buffer));
 }
 
 WHIM_UTIL void x11ReadjustWindow(WhimWin* win)
 {
-    WHIM_32BIT_PAYLOAD(7) buffer = {{12}}; // ConfigureWindow
-    buffer.as_16[1] = sizeof(buffer.req_size);
-    buffer.as_32[1] = win->window_id;
+    WhimPayload buffer[7] = {{12}}; // ConfigureWindow
+    buffer->as_16[1] = PAYLOAD_SIZE(buffer);
+    buffer[1].as_32 = win->window_id;
 
-    buffer.as_32[2] = 1 | 2 | 4 | 8; buffer.as_32[3] = win->rect.x1; buffer.as_32[4] = win->rect.y1; buffer.as_32[5] = win->rect.x2; buffer.as_32[6] = win->rect.y2;
+    buffer[2].as_32 = 1 | 2 | 4 | 8; buffer[3].as_32 = win->rect.x1; buffer[4].as_32 = win->rect.y1; buffer[5].as_32 = win->rect.x2; buffer[6].as_32 = win->rect.y2;
 
-    WHIM_SEND_REQUEST(&buffer, sizeof(buffer.as_8));
+    WHIM_SEND_REQUEST(&buffer, sizeof(buffer));
 }
 
 WHIM_UTIL void x11ChangeProperty(WhimWin* win, whim_u32 property, whim_u32 type, whim_u8 format, whim_u32 data_length, const void* data)
 {
     whim_u32 data_bytes = data_length * format / 8;
-    WHIM_32BIT_PAYLOAD(6) buffer = {{18}};
-    buffer.as_16[1] = sizeof(buffer.req_size) + (data_bytes + 3) / 4;
-    buffer.as_32[1] = win->window_id;
+    WhimPayload buffer[6] = {{18}};
+    buffer->as_16[1] = PAYLOAD_SIZE(buffer) + (data_bytes + 3) / 4;
+    buffer[1].as_32 = win->window_id;
 
-    buffer.as_32[2] = property;
-    buffer.as_32[3] = type;
-    buffer.as_8[16] = format;
-    buffer.as_32[5] = data_length;
+    buffer[2].as_32 = property;
+    buffer[3].as_32 = type;
+    buffer[4].as_8[0] = format;
+    buffer[5].as_32 = data_length;
 
-    struct whim_xcb_iovec vecs[4] = {{&buffer, sizeof(buffer.as_8)}, {0}, {(void*)data, data_bytes}, {&buffer, -data_bytes & 3}};
-    x11.sendRequest(x11.connection, 2, vecs, &(struct whim_xcb_req_t){4, 0, 0, 1});
+    struct whim_xcb__iovec vecs[4] = {{&buffer, sizeof(buffer)}, {0}, {(void*)data, data_bytes}, {&buffer, -data_bytes & 3}};
+    x11.sendRequest(x11.connection, 2, vecs, (struct whim_xcb__req_t[1]){4, 0, 0, 1});
 }
 
 WHIM_API(WhimWin* whimWinCreate, X11)(WhimRect rect, const char *title, WhimColor clear_color, enum WhimWinFlags flags)
@@ -410,8 +384,8 @@ WHIM_API(void whimWinSetTitle, X11)(WhimWin *window, const char *title) {
 
 WHIM_API(void whimWinDestroy, X11)(WhimWin *window)
 {
-    WHIM_32BIT_PAYLOAD(2) buffer = {{4}}; buffer.as_16[1] = 2; buffer.as_32[1] = window->window_id;
-    WHIM_SEND_REQUEST(&buffer, sizeof(buffer.as_8));
+    WhimPayload buffer[2] = {{4}}; buffer[0].as_16[1] = 2; buffer[1].as_32 = window->window_id;
+    WHIM_SEND_REQUEST(&buffer, sizeof(buffer));
     WHIM_FREE(window);
 }
 
@@ -421,20 +395,19 @@ WHIM_API(void whimDeinit, X11)(void)
     dlclose(x11.handle);
 }
 
-union WhimPayloadReceiver { whim_u8 *as_8; whim_u16 *as_16; whim_u32 *as_32; };
-WHIM_UTIL void x11ParseEvent(union WhimPayloadReceiver receiver, WhimEvent *event)
+WHIM_UTIL void x11ParseEvent(WhimPayload receiver[], WhimEvent *event)
 {
     enum {KEY_PRESS = 2, KEY_RELEASE = 3, CLIENT_MESSAGE = 33};
-    switch(receiver.as_8[0] & (whim_u8)~0x80) {
+    switch(receiver[0].as_8[0] & (whim_u8)~0x80) {
         case KEY_PRESS:
-            event->as_key = (struct WhimKeyEvent){WHIM_EVENT_KEY, receiver.as_8[1], 1};
+            event->as_key = (struct WhimKeyEvent){WHIM_EVENT_KEY, receiver[0].as_8[1], 1};
             break;
         case KEY_RELEASE:
-            event->as_key = (struct WhimKeyEvent){WHIM_EVENT_KEY, receiver.as_8[1], 0};
+            event->as_key = (struct WhimKeyEvent){WHIM_EVENT_KEY, receiver[0].as_8[1], 0};
             break;
         case CLIENT_MESSAGE:
-            if(receiver.as_32[3] == x11.atoms.close)
-                event->as_close = (struct WhimCloseEvent){WHIM_EVENT_CLOSE, receiver.as_32[1]};
+            if(receiver[3].as_32 == x11.atoms.close)
+                event->as_close = (struct WhimCloseEvent){WHIM_EVENT_CLOSE, receiver[1].as_32};
             break;
     }
 }
@@ -444,16 +417,16 @@ WHIM_API(void whimPollEvents, X11)(WhimEvent *event)
     WHIM_ASSERT(event, "Invalid event");
 
     /* NOTICE: WHIM assumes that xcb events have the same layout as the payload, technically this breaks strict aliasing */
-    WHIM_8BIT_PAYLOAD(32) receiver;
-    union WhimPayloadReceiver x11_event = {(whim_u8*)x11.checkEventQueue(x11.connection)};
+    WhimPayload receiver[8];
+    WhimPayload *queued_event = (WhimPayload*)x11.checkEventQueue(x11.connection);
 
-    if(x11_event.as_8) {
-        x11ParseEvent(x11_event, event);
-        x11.free(x11_event.as_8);
+    if(queued_event) {
+        x11ParseEvent(queued_event, event);
+        x11.free(queued_event);
         return;
     }
 
-    int bytes_read = read(x11.fd, &receiver, sizeof(receiver.as_8));
+    int bytes_read = read(x11.fd, &receiver, sizeof(receiver));
     if(bytes_read <= 0) {
         WHIM_ASSERT(bytes_read != 0, "TODO: Handle connection close");
         WHIM_ASSERT(errno == EAGAIN, "TODO: Handle read errors");
@@ -464,12 +437,29 @@ WHIM_API(void whimPollEvents, X11)(WhimEvent *event)
 
     //if(receiver.as_8[0] == 0) printf("Error happened: %d \n", receiver.as_8[1]);
 
-    WHIM_ASSERT(receiver.as_8[0] != 0, "TODO: Create proper error handling");
-    WHIM_ASSERT(receiver.as_8[0] != 1, "TODO: How do even handle replies here?");
+    WHIM_ASSERT(receiver->as_8[0] != 0, "TODO: Create proper error handling");
+    WHIM_ASSERT(receiver->as_8[0] != 1, "TODO: How do even handle replies here?");
 
-    x11_event.as_8 = receiver.as_8;
-    x11ParseEvent(x11_event, event);
+    x11ParseEvent(receiver, event);
 }
 #endif
-
 #endif
+
+/*
+MIT No Attribution
+
+Copyright 2026 steampuker
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this
+software and associated documentation files (the "Software"), to deal in the Software
+without restriction, including without limitation the rights to use, copy, modify,
+merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
