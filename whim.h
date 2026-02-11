@@ -124,11 +124,11 @@ void whimWinSetSizeLimits(WhimWin *window, WhimVec2 min_size, WhimVec2 max_size)
 void whimWinSetClearColor(WhimWin *window, WhimColor color);
 whim_bool whimWinShouldClose(WhimWin *window);
 
-#ifdef WHIM_IMPLEMENTATION
-/* X11 backend */
+#ifdef WHIM_IMPLEMENTATION // X11 Backend
 #include <unistd.h>
 #include <errno.h>
 #include <dlfcn.h>
+#include <poll.h>
 
 // NOTE: WHIM_API will be used in the future, for now it doesn't do anything
 #define WHIM_API(func, postfix) func
@@ -154,7 +154,7 @@ struct whim_xcb__iovec { void* base; int len; };
 struct whim_xcb__req_t { size_t count; void *ext; whim_u8 opcode, isvoid; };
 
 typedef union { whim_u8 as_8[4]; whim_u16 as_16[2]; whim_u32 as_32; } WhimPayload;
-#define PAYLOAD_SIZE(x) (sizeof(x) / sizeof(WhimPayload))
+#define WHIM_ARRLEN(x) (sizeof(x) / sizeof(*x))
 
 #define WHIM_SEND_REQUEST(payload, payload_size) x11.sendRequest(x11.connection, 2, (struct whim_xcb__iovec[2]){{payload, payload_size}}, (struct whim_xcb__req_t[1]){1, 0, 0, 1});
 
@@ -180,18 +180,32 @@ static struct WhimX11State {
     } atoms;
 
     whim_u32 screens, root_window, fd;
-    whim_u32 xkb_opcode;
+    whim_u8 xkb_opcode;
 } x11;
 
+WHIM_UTIL whim_bool whimPollReceive(WhimPayload *receiver, whim_u32 size)
+{
+    enum { POLL_TIMEOUT = -1 };
+    struct pollfd fd_poll[1] = {x11.fd, POLLIN};
+
+    if(poll(fd_poll, 1, POLL_TIMEOUT) <= 0)
+        return 0;
+
+    if(read(x11.fd, receiver, size) <= 0)
+        return 0;
+
+    return 1;
+}
+
+#define X11_INTERN_ATOM(str) x11String8Req(16, str, sizeof(str) - 1)
+#define X11_QUERY_EXT(str) x11String8Req(98, str, sizeof(str) - 1)
 WHIM_UTIL void x11String8Req(whim_u8 req, char *str, whim_u32 str_len)
 {
-    WhimPayload buffer[2] = {{req}}; buffer[0].as_16[1] = PAYLOAD_SIZE(buffer) + (str_len + 3) / 4, buffer[1].as_16[0] = str_len;
+    WhimPayload buffer[2] = {{req}}; buffer->as_16[1] = WHIM_ARRLEN(buffer) + (str_len + 3) / 4, buffer[1].as_16[0] = str_len;
 
     struct whim_xcb__iovec vecs[4] = {{&buffer, sizeof(buffer)}, {0}, {str, str_len}, {&buffer, -str_len & 3}};
     x11.sendRequest(x11.connection, 2, vecs, (struct whim_xcb__req_t[1]){4, 0, 0, 1});
 }
-#define X11_INTERN_ATOM(str) x11String8Req(16, str, sizeof(str) - 1)
-#define X11_QUERY_EXT(str) x11String8Req(98, str, sizeof(str) - 1)
 
 WHIM_UTIL whim_u32* x11ScreenOfDisplay(void *con, int screen)
 {
@@ -213,47 +227,46 @@ WHIM_UTIL void x11RoundtripAtoms(void)
     WhimPayload receiver[8];
     whim_u32 *atoms[] = {&x11.atoms.wm_protocols, &x11.atoms.close, &x11.atoms.name, &x11.atoms.utf8_str};
 
-    for(size_t i = 0; i < sizeof(atoms) / sizeof(*atoms);) {
-        if(read(x11.fd, &receiver, sizeof(receiver)) <= 0) continue;
-        *atoms[i++] = receiver[2].as_32;
+    for(size_t i = 0; i < WHIM_ARRLEN(atoms); i++) {
+        if(!whimPollReceive(receiver, sizeof receiver))
+            continue;
+
+        *atoms[i] = receiver[2].as_32;
     }
 }
 
-WHIM_UTIL void x11RoundtripXkb(void)
+WHIM_UTIL void x11RoundtripExtensions(void)
 {
-    enum {XKB_AUTOREPEAT = 1, XKB_USE, XKB_EXT, XKB_MAJOR = 1, XKB_MINOR = 0};
-    WhimPayload receiver[8];
+    enum {XKB_MAJOR = 1, XKB_MINOR = 0};
+    WhimPayload xkb_receiver[8];
 
-    for(int stage = XKB_EXT; stage > 0;) {
-        if(read(x11.fd, &receiver, sizeof(receiver)) <= 0) continue;
-        switch(stage) {
-        case XKB_EXT: {
-            WHIM_ASSERT(receiver[0].as_8[0] && receiver[2].as_8[0], "XKB is not supported");
-            x11.xkb_opcode = receiver[2].as_8[1];
+    if(whimPollReceive(xkb_receiver, sizeof xkb_receiver)) do { // Initialize xkb
+        if(!xkb_receiver[0].as_8[0] || !xkb_receiver[2].as_8[0])
+            break; // xkb is not present
 
-            WhimPayload buffer[2]  = {{x11.xkb_opcode, 0}}; buffer[0].as_16[1] = PAYLOAD_SIZE(buffer); // XkbUseExtension
-            WhimPayload buffer2[7] = {{x11.xkb_opcode, 21}}; buffer2[0].as_16[1] = PAYLOAD_SIZE(buffer2); // XkbSetAutorepeat
+        whim_u8 opcode = xkb_receiver[2].as_8[1];
 
-            buffer[1].as_16[0] = XKB_MAJOR, buffer[1].as_16[1] = XKB_MINOR;
-            buffer2[1].as_16[0] = 256, buffer2[2].as_32 = 1, buffer2[3].as_32 = 1;
+        WhimPayload buffer[2] = {{opcode, 0 /* XkbUseExtension */}}; buffer->as_16[1] = WHIM_ARRLEN(buffer);
+        WhimPayload buffer2[7] = {{opcode, 21 /* XkbSetAutorepeat */}}; buffer2->as_16[1] = WHIM_ARRLEN(buffer2);
 
-            WHIM_SEND_REQUEST(&buffer, sizeof(buffer));
-            WHIM_SEND_REQUEST(&buffer2, sizeof(buffer2));
+        buffer[1].as_16[0] = XKB_MAJOR, buffer[1].as_16[1] = XKB_MINOR;
+        buffer2[1].as_16[0] = 256, buffer2[2].as_32 = 1, buffer2[3].as_32 = 1;
 
-            x11.flush(x11.connection);
-            --stage;
-            continue;
-        }
-        case XKB_USE:
-            WHIM_ASSERT(receiver[0].as_8[1], "Can't use XKB, invalid version?");
-            --stage;
-            continue;
-        case XKB_AUTOREPEAT:
-            WHIM_ASSERT(receiver[2].as_32 & (1 << 1), "Detectable autorepeat is not supported");
-        }
+        WHIM_SEND_REQUEST(&buffer, sizeof(buffer));
+        WHIM_SEND_REQUEST(&buffer2, sizeof(buffer2));
 
-        break;
-    }
+        x11.flush(x11.connection);
+
+        if(!whimPollReceive(xkb_receiver, sizeof xkb_receiver) ||
+           !xkb_receiver[0].as_8[0] || !xkb_receiver[2].as_8[0])
+            break; // Can't use xkb
+
+        x11.xkb_opcode = opcode;
+
+        if(!whimPollReceive(xkb_receiver, sizeof xkb_receiver) ||
+           !xkb_receiver[0].as_8[0] || !xkb_receiver[2].as_8[0])
+            break; // Autorepeat unsupported
+    } while(0);
 }
 
 WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
@@ -280,7 +293,7 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
 
     x11.flush(x11.connection);
 
-    int (*x11GetFileDescriptor)(void*) = dlsym(x11.handle, "xcb_get_file_descriptor");
+    int (*x11GetFd)(void*) = dlsym(x11.handle, "xcb_get_file_descriptor");
     x11.checkEventQueue = dlsym(x11.handle, "xcb_poll_for_queued_event");
     x11.generateID = dlsym(x11.handle, "xcb_generate_id");
     x11.getReply = dlsym(x11.handle, "xcb_wait_for_reply");
@@ -291,11 +304,11 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
     x11.free = dlsym(x11.handle, "free");
 #endif
 
-    x11.fd = x11GetFileDescriptor(x11.connection);
+    x11.fd = x11GetFd(x11.connection);
     x11.root_window = *root_window_ptr;
 
     x11RoundtripAtoms();
-    x11RoundtripXkb();
+    x11RoundtripExtensions();
 
     return WHIM_TRUE;
 
@@ -312,7 +325,7 @@ WHIM_UTIL void x11CreateWindow(WhimWin *win, whim_u32 parent, whim_u32 clear_col
     enum { WIN_BACKGROUND = 0x00000002, WIN_EVENTS = 0x00000800,
            EVENT_KEY_PRESS = 1, EVENT_KEY_RELEASE = 2};
     WhimPayload buffer[10] = {{1}};
-    buffer->as_16[1] = PAYLOAD_SIZE(buffer);
+    buffer->as_16[1] = WHIM_ARRLEN(buffer);
     buffer[1].as_32 = win->window_id;
 
     buffer[2].as_32 = parent;
@@ -326,14 +339,14 @@ WHIM_UTIL void x11CreateWindow(WhimWin *win, whim_u32 parent, whim_u32 clear_col
 
 WHIM_UTIL void x11MapWindow(WhimWin* win, whim_bool should_map)
 {
-    WhimPayload buffer[2] = {{should_map ? 8 : 10}}; buffer->as_16[1] = PAYLOAD_SIZE(buffer); buffer[1].as_32 = win->window_id;
+    WhimPayload buffer[2] = {{should_map ? 8 : 10}}; buffer->as_16[1] = WHIM_ARRLEN(buffer); buffer[1].as_32 = win->window_id;
     WHIM_SEND_REQUEST(&buffer, sizeof(buffer));
 }
 
 WHIM_UTIL void x11ReadjustWindow(WhimWin* win)
 {
     WhimPayload buffer[7] = {{12}}; // ConfigureWindow
-    buffer->as_16[1] = PAYLOAD_SIZE(buffer);
+    buffer->as_16[1] = WHIM_ARRLEN(buffer);
     buffer[1].as_32 = win->window_id;
 
     buffer[2].as_32 = 1 | 2 | 4 | 8; buffer[3].as_32 = win->rect.x1; buffer[4].as_32 = win->rect.y1; buffer[5].as_32 = win->rect.x2; buffer[6].as_32 = win->rect.y2;
@@ -345,7 +358,7 @@ WHIM_UTIL void x11ChangeProperty(WhimWin* win, whim_u32 property, whim_u32 type,
 {
     whim_u32 data_bytes = data_length * format / 8;
     WhimPayload buffer[6] = {{18}};
-    buffer->as_16[1] = PAYLOAD_SIZE(buffer) + (data_bytes + 3) / 4;
+    buffer->as_16[1] = WHIM_ARRLEN(buffer) + (data_bytes + 3) / 4;
     buffer[1].as_32 = win->window_id;
 
     buffer[2].as_32 = property;
@@ -384,7 +397,7 @@ WHIM_API(void whimWinSetTitle, X11)(WhimWin *window, const char *title) {
 
 WHIM_API(void whimWinDestroy, X11)(WhimWin *window)
 {
-    WhimPayload buffer[2] = {{4}}; buffer[0].as_16[1] = 2; buffer[1].as_32 = window->window_id;
+    WhimPayload buffer[2] = {{4}}; buffer->as_16[1] = 2; buffer[1].as_32 = window->window_id;
     WHIM_SEND_REQUEST(&buffer, sizeof(buffer));
     WHIM_FREE(window);
 }
@@ -435,7 +448,7 @@ WHIM_API(void whimPollEvents, X11)(WhimEvent *event)
         return;
     }
 
-    //if(receiver.as_8[0] == 0) printf("Error happened: %d \n", receiver.as_8[1]);
+    //if(receiver->as_8[0] == 0) printf("Error happened: %d \n", receiver->as_8[1]);
 
     WHIM_ASSERT(receiver->as_8[0] != 0, "TODO: Create proper error handling");
     WHIM_ASSERT(receiver->as_8[0] != 1, "TODO: How do even handle replies here?");
