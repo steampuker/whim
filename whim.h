@@ -455,6 +455,97 @@ WHIM_API(void whimPollEvents, X11)(WhimEvent *event)
 
     x11ParseEvent(receiver, event);
 }
+
+// Xkb Specifics
+
+static struct {
+        WhimPayload *ptr;
+        whim_u16 indices[256 - 8];
+} xkb_keymap;
+
+static void xkbGetMap(int map) // 2 = KeySym map
+{
+/*
+    Some useful info:
+        sequence = receiver->as_16[1]
+        length = receiver[1].as_32
+        keycode-range = receiver[2].as_8[2] : receiver[2].as_8[3]
+        present = receiver[6].as_16[0]
+        keysym: first = receiver[4].as_8[1], total = receiver[4].as_16[1], nSyms = receiver[5].as_8[0]
+*/
+
+    WhimPayload buffer[7] = {x11.xkb_opcode, 8}; // GetMap
+    buffer->as_16[1] = WHIM_ARRLEN(buffer); // length
+    buffer[1].as_16[0] = 256; // deviceSpec
+    buffer[1].as_16[1] = map; // full
+
+    int seq = WHIM_SEND_REQUEST(&buffer, sizeof(buffer));
+    x11.flush(x11.connection);
+
+    WhimPayload *receiver = x11.getReply(x11.connection, seq, 0);
+
+    int nSyms = receiver[5].as_8[0];
+    WhimPayload *cursor = xkb_keymap.ptr = receiver + 10;
+    for(int i = 0, index = 0; i < nSyms; ++i) {
+        WHIM_ASSERT(((whim_u16)cursor[1].as_8[0] * cursor[1].as_8[1]) == cursor[1].as_16[1], "Size mismatch, wrong indices");
+        xkb_keymap.indices[i] = index;
+        index += cursor[1].as_16[1] + 2;
+        cursor = xkb_keymap.ptr + index;
+    }
+}
+
+static whim_u32 xkbKeycodeToKesysym(whim_u32 keycode, whim_u8 group, whim_u32 level)
+{
+    whim_u32 offset = xkb_keymap.indices[keycode - 8];
+    whim_u8 group_info = xkb_keymap.ptr[offset + 1].as_8[0];
+    whim_u8 width = xkb_keymap.ptr[offset + 1].as_8[1];
+
+    whim_u8 num_groups = group_info & 0x0f;
+    if(group >= num_groups)
+        switch(group_info & 0xc0) {
+        default: // Wrap
+                group %= num_groups; break;
+        case 64: // Clamp
+                group = num_groups - 1; break;
+        case 128: // Redirect
+                group = (group_info & 48) / 16; break;
+        }
+
+    if(level >= width)
+        level = 0;
+
+    whim_u32 entry = group * width + level;
+    WHIM_ASSERT(xkb_keymap.ptr[offset + 1].as_16[1] >= entry, "keycodeToKeysym: Out of bounds");
+
+    return xkb_keymap.ptr[offset + 2 + entry].as_32;
+}
+
+whim_u32 encodeUtf8(whim_u32 c, char* out) {
+    whim_u32 cur = 0;
+
+    if(c <= 128)
+        out[cur++] = c;
+    else if(c < 2048)
+        out[cur++] = 0xC0 | (c >> 6), out[cur++] = 0x80 | (c & 0x3F);
+    else if(c < 65536)
+        out[cur++] = 0xE0 | (c >> 12), out[cur++] = 0x80 | ((c >> 6) & 0x3F),
+        out[cur++] = 0x80 | (c & 0x3F);
+    else
+        out[cur++] = 0xF0 | (c >> 18), out[cur++] = 0x80 | ((c >> 12) & 0x3F),
+        out[cur++] = 0x80 | ((c >> 6) & 0x3F), out[cur++] = 0x80 | (c & 0x3F);
+
+    return cur;
+}
+
+whim_u8 keysymToUtf8(whim_u32 keysym, char out_buffer[static 5]) {
+    if(keysym <= 0x00ff) // Full Latin-1 coverages
+        return encodeUtf8(keysym, out_buffer);
+
+    // Unknown characters are replaced with replacement ?
+    out_buffer[0] = 0xEF, out_buffer[1] = 0xBF, out_buffer[2] = 0xBD;
+    return 3;
+}
+
 #endif
 #endif
 
