@@ -47,11 +47,11 @@ int main(void) {
 
 ## Feedback
 
-whim is in an early stage of development, as of now it supports X11 through libxcb and it doesn't support any graphics context out of the box. 
+whim is in an early stage of development, as of now it supports only X11 through libxcb and it doesn't support any graphics context out of the box.
 
-Vulkan seems to work though.
+Vulkan seems to work though, if you can create a context.
 
-C++ is not supported at the moment.
+C++ is not supported.
 
 PRs are welcome!
 
