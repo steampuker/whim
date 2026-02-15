@@ -543,7 +543,7 @@ WHIM_API(void whimHookPollEvents, X11)(WhimHook *hook, WhimEvent *event)
 
     int bytes_read = read(hook->file_desc, &receiver, sizeof(receiver));
     if(bytes_read <= 0) {
-        WHIM_ASSERT(bytes_read != 0, "TODO: Handle con close");
+        WHIM_ASSERT(bytes_read != 0, "TODO: Handle connection close");
         WHIM_ASSERT(errno == EAGAIN, "TODO: Handle read errors");
 
         event->type = WHIM_EVENT_NONE;
@@ -553,7 +553,7 @@ WHIM_API(void whimHookPollEvents, X11)(WhimHook *hook, WhimEvent *event)
     //if(receiver->as_8[0] == 0) printf("Error happened: %d \n", receiver->as_8[1]);
 
     WHIM_ASSERT(receiver->as_8[0] != 0, "TODO: Create proper error handling");
-    WHIM_ASSERT(receiver->as_8[0] != 1, "TODO: How do even hook replies here?");
+    WHIM_ASSERT(receiver->as_8[0] != 1, "TODO: How do we even handle replies here?");
 
     x11ParseEvent(receiver, event);
 }
