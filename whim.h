@@ -258,7 +258,7 @@ WHIM_UTIL void whimXcbSendRequest(const WhimHook* WHIM_NOALIAS hook, void* WHIM_
     WHIM_ASSERT(result, "Invalid data handling");
 }
 
-WHIM_UTIL void whimXcbSendMultiRequest(const WhimHook* WHIM_NOALIAS hook, const whim_u32 count, void* WHIM_NOALIAS buffers[], const whim_u32 lengths[])
+WHIM_UTIL void whimXcbSendRequestMix(const WhimHook* WHIM_NOALIAS hook, const whim_u32 count, void* WHIM_NOALIAS buffers[], const whim_u32 lengths[])
 {
     enum { IOVEC_MAX = 4 };
     WHIM_ASSERT(count * 2 <= IOVEC_MAX, "iovec limit exceeded");
@@ -297,7 +297,7 @@ WHIM_UTIL void x11String8Req(const WhimHook* WHIM_NOALIAS hook, whim_u8 req, cha
     WhimPayload buffer[2] = {{req}}; buffer->as_16[1] = WHIM_ARRLEN(buffer) + (str_len + 3) / 4, buffer[1].as_16[0] = str_len;
     void *ptr[] = {buffer, str};
     whim_u32 lengths[] = {sizeof buffer, str_len};
-    whimXcbSendMultiRequest(hook, WHIM_ARRLEN(ptr), ptr, lengths);
+    whimXcbSendRequestMix(hook, WHIM_ARRLEN(ptr), ptr, lengths);
 }
 
 WHIM_UTIL whim_u32* x11ScreenOfDisplay(void *con, int screen)
@@ -345,10 +345,8 @@ WHIM_UTIL void x11RoundtripExtensions(WhimHook* hook)
         buffer[1].as_16[0] = XKB_MAJOR, buffer[1].as_16[1] = XKB_MINOR;
         buffer2[1].as_16[0] = 256, buffer2[2].as_32 = 1, buffer2[3].as_32 = 1;
 
-        void* ptrs[] = {buffer, buffer2};
-        whim_u32 lengths[] = {sizeof buffer, sizeof buffer2};
-
-        whimXcbSendMultiRequest(hook, WHIM_ARRLEN(ptrs), ptrs, lengths);
+        whimXcbSendRequest(hook, buffer, sizeof buffer);
+        whimXcbSendRequest(hook, buffer2, sizeof buffer2);
 
         x11.flush(x11.hook.connection);
 
@@ -462,7 +460,7 @@ WHIM_UTIL void x11ChangeWindowAttr(WhimWin* win, whim_u32 mask, whim_u32 count, 
 
     void *payloads[] = {buffer, values};
     whim_u32 lengths[] = {sizeof buffer, count * sizeof *values};
-    whimXcbSendMultiRequest(win->hook, WHIM_ARRLEN(payloads), payloads, lengths);
+    whimXcbSendRequestMix(win->hook, WHIM_ARRLEN(payloads), payloads, lengths);
 }
 
 WHIM_UTIL void x11ChangeProperty(WhimWin* win, whim_u32 property, whim_u32 type, whim_u8 format, whim_u32 data_length, const void* data)
@@ -479,7 +477,7 @@ WHIM_UTIL void x11ChangeProperty(WhimWin* win, whim_u32 property, whim_u32 type,
 
     void *payloads[] = {buffer, (void*)data};
     whim_u32 lengths[] = {sizeof buffer, data_bytes};
-    whimXcbSendMultiRequest(win->hook, WHIM_ARRLEN(payloads), payloads, lengths);
+    whimXcbSendRequestMix(win->hook, WHIM_ARRLEN(payloads), payloads, lengths);
 }
 
 WHIM_API(WhimWin* whimWinCreateHooked, X11)(WhimHook *hook, WhimRect rect, const char *title, WhimColor clear_color, enum WhimWinFlags flags)
