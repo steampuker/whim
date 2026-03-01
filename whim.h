@@ -3,6 +3,7 @@
 #define WHIM_H
 #if !defined(WHIM_NO_STDINT)
     #include <stdint.h>
+    #include <stddef.h>
     typedef _Bool whim_bool;
 
     typedef int8_t   whim_i8;
@@ -13,6 +14,8 @@
     typedef uint32_t whim_u32;
     typedef int64_t  whim_i64;
     typedef uint64_t whim_u64;
+
+    typedef size_t whim_size_t;
 #else
     typedef _Bool whim_bool;
     typedef   signed char  whim_i8;
@@ -21,6 +24,8 @@
     typedef unsigned short whim_u16;
     typedef   signed int   whim_i32;
     typedef unsigned int   whim_u32;
+
+    typedef unsigned long whim_size_t;
 
     #if defined(_MSC_VER) && (_MSC_VER < 1600)
         typedef   signed __int64 whim_i64;
@@ -33,22 +38,6 @@
 
 #define WHIM_TRUE (whim_bool)1
 #define WHIM_FALSE (whim_bool)0
-
-#ifndef WHIM_MALLOC
-    #include <stdlib.h>
-    #define WHIM_MALLOC malloc
-    #define WHIM_FREE free
-#endif
-
-#ifndef WHIM_STRLEN
-    #include <string.h>
-    #define WHIM_STRLEN strlen
-#endif
-
-#ifndef WHIM_ASSERT
-    #include <assert.h>
-    #define WHIM_ASSERT(cond, message) assert(((void)message, cond))
-#endif
 
 #define WHIM_COLOR_TO_HEX(x) (const whim_u32){((x.b) | (x.g << 8) | (x.r << 16)) & 0xFFFFFFFF}
 #define WHIM_HEX_TO_COLOR(x) (WhimColor){(x & 0xFF) >> 16, (x & 0xFF) >> 8, (x & 0xFF)}
@@ -189,7 +178,40 @@ void whimWinSetSizeLimits(WhimWin *window, WhimVec2 min_size, WhimVec2 max_size)
 void whimWinSetClearColor(WhimWin *window, WhimColor color);
 whim_bool whimWinShouldClose(WhimWin *window);
 
-#ifdef WHIM_IMPLEMENTATION // X11 Backend
+
+#ifdef WHIM_IMPLEMENTATION
+
+#if !defined(NDEBUG) && !defined(WHIM_ASSERT)
+    #include <assert.h>
+    #define WHIM_ASSERT(cond, msg) assert(msg && (cond));
+#endif
+
+typedef struct {
+    void*        context;
+    void*        (*alloc)(whim_size_t bytes, void* ctx);
+    void         (*free)(void* ptr, whim_size_t bytes, void* ctx);
+    whim_size_t  (*strlen)(const char* str);
+} WhimCore;
+
+#ifndef WHIM_CUSTOM_CORE
+    #include <stdlib.h>
+    #include <string.h>
+    static inline void* whim__alloc(whim_size_t size, void* c) { (void)c; return malloc(size); }
+    static inline void whim__free(void* ptr, whim_size_t b, void* c) { (void)c; (void)b; return free(ptr); }
+    static inline whim_size_t whim__strlen(const char* c) { return (whim_size_t)strlen(c); }
+
+    static const WhimCore whim_core = {
+        0,
+        whim__alloc,
+        whim__free,
+        whim__strlen
+    };
+#else
+    static WhimCore whim_core;
+#endif
+
+
+// X11 Backend
 #include <unistd.h>
 #include <errno.h>
 #include <dlfcn.h>
@@ -200,14 +222,6 @@ whim_bool whimWinShouldClose(WhimWin *window);
 #define WHIM_UTIL static inline
 #define WHIM_NOALIAS restrict
 
-#ifdef __has_feature
-#    if(__has_feature(address_sanitizer) || __has_feature(thread_sanitizer))
-#    define WHIM_SANITIZERS_ON
-#    endif
-#elif !defined(WHIM_SANITIZERS_ON) && (defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__))
-#define WHIM_SANITIZERS_ON
-#endif
-
 struct whim_xcb__iovec { void* base; size_t len; };
 struct whim_xcb__req_t { size_t count; void *ext; whim_u8 opcode, isvoid; };
 
@@ -215,10 +229,10 @@ typedef union { whim_u8 as_8[4]; whim_u16 as_16[2]; whim_u32 as_32; } WhimPayloa
 #define WHIM_ARRLEN(x) (sizeof(x) / sizeof(*x))
 
 struct WhimWin {
-    whim_u32 window_id;
+    const whim_u32 window_id;
     WhimRect rect;
 
-    WhimHook *hook;
+    WhimHook * const hook;
 };
 
 struct WhimHook {
@@ -251,14 +265,14 @@ static struct WhimX11State {
 } x11;
 
 
-WHIM_UTIL void whimXcbSendRequest(const WhimHook* WHIM_NOALIAS hook, void* WHIM_NOALIAS payload, size_t payload_length) {
+WHIM_UTIL void whimXcbSendRequest(WhimHook* WHIM_NOALIAS hook, void* WHIM_NOALIAS payload, size_t payload_length) {
     struct whim_xcb__req_t req[1] = {1, 0, 0, 1};
     struct whim_xcb__iovec iovec[2] = {{payload, payload_length}};
     int result = x11.sendRequest(hook->connection, 2, iovec, req);
     WHIM_ASSERT(result, "Invalid data handling");
 }
 
-WHIM_UTIL void whimXcbSendRequestMix(const WhimHook* WHIM_NOALIAS hook, const whim_u32 count, void* WHIM_NOALIAS buffers[], const whim_u32 lengths[])
+WHIM_UTIL void whimXcbSendRequestMix(WhimHook* WHIM_NOALIAS hook, whim_u32 count, void* WHIM_NOALIAS buffers[], whim_u32 lengths[])
 {
     enum { IOVEC_MAX = 4 };
     WHIM_ASSERT(count * 2 <= IOVEC_MAX, "iovec limit exceeded");
@@ -292,10 +306,10 @@ WHIM_UTIL whim_bool whimPollReceive(whim_u32 file_desc, WhimPayload *receiver, w
 
 #define X11_INTERN_ATOM(hook, str) x11String8Req(hook, 16, str, sizeof(str) - 1)
 #define X11_QUERY_EXT(hook, str) x11String8Req(hook, 98, str, sizeof(str) - 1)
-WHIM_UTIL void x11String8Req(const WhimHook* WHIM_NOALIAS hook, whim_u8 req, char* WHIM_NOALIAS str, whim_u32 str_len)
+WHIM_UTIL void x11String8Req(WhimHook* WHIM_NOALIAS hook, whim_u8 req, const char* WHIM_NOALIAS str, whim_u32 str_len)
 {
     WhimPayload buffer[2] = {{req}}; buffer->as_16[1] = WHIM_ARRLEN(buffer) + (str_len + 3) / 4, buffer[1].as_16[0] = str_len;
-    void *ptr[] = {buffer, str};
+    void *ptr[] = {buffer, (void*)str};
     whim_u32 lengths[] = {sizeof buffer, str_len};
     whimXcbSendRequestMix(hook, WHIM_ARRLEN(ptr), ptr, lengths);
 }
@@ -364,6 +378,7 @@ WHIM_UTIL void x11RoundtripExtensions(WhimHook* hook)
 
 WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
 {
+    WHIM_ASSERT(whim_core.alloc && whim_core.free && whim_core.strlen, "Core functions are not defined, initialize whim_core");
     if(!(x11.lib = dlopen("libxcb.so.1", RTLD_LAZY | RTLD_LOCAL)))
         goto LIBRARY_FAIL;
 
@@ -396,11 +411,7 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
     x11.generateID = dlsym(x11.lib, "xcb_generate_id");
     x11.getReply = dlsym(x11.lib, "xcb_wait_for_reply");
 
-#ifdef WHIM_SANITIZERS_ON
-    x11.free = dlsym(0, "free");
-#else
     x11.free = dlsym(x11.lib, "free");
-#endif
 
     x11.hook.file_desc = x11.getFileDesc(x11.hook.connection);
     x11.root_window = *root_window_ptr;
@@ -457,7 +468,6 @@ WHIM_UTIL void x11ChangeWindowAttr(WhimWin* win, whim_u32 mask, whim_u32 count, 
     buffer[1].as_32 = win->window_id;
     buffer[2].as_32 = mask;
 
-
     void *payloads[] = {buffer, values};
     whim_u32 lengths[] = {sizeof buffer, count * sizeof *values};
     whimXcbSendRequestMix(win->hook, WHIM_ARRLEN(payloads), payloads, lengths);
@@ -482,11 +492,11 @@ WHIM_UTIL void x11ChangeProperty(WhimWin* win, whim_u32 property, whim_u32 type,
 
 WHIM_API(WhimWin* whimWinCreateHooked, X11)(WhimHook *hook, WhimRect rect, const char *title, WhimColor clear_color, enum WhimWinFlags flags)
 {
-    WhimWin* win = WHIM_MALLOC(sizeof(*win));
+    WhimWin* win = whim_core.alloc(sizeof *win, whim_core.context);
     if(!win) return 0;
 
-    win->hook = hook;
-    win->window_id = x11.generateID(win->hook->connection);
+    *(WhimHook**)&win->hook = hook;
+    *(whim_u32*)&win->window_id = x11.generateID(win->hook->connection);
     win->rect = rect;
 
     (void)flags;
@@ -497,7 +507,7 @@ WHIM_API(WhimWin* whimWinCreateHooked, X11)(WhimHook *hook, WhimRect rect, const
     x11ChangeWindowAttr(win, X11_WIN_BACKGROUND | X11_WIN_EVENTS, 2, values);
     x11MapWindow(win, WHIM_TRUE);
     x11ReadjustWindow(win);
-    x11ChangeProperty(win, x11.atoms.name, x11.atoms.utf8_str, 8, WHIM_STRLEN(title), title);
+    x11ChangeProperty(win, x11.atoms.name, x11.atoms.utf8_str, 8, whim_core.strlen(title), title);
     x11ChangeProperty(win, x11.atoms.wm_protocols, 4, 32, 1, &x11.atoms.close);
     x11.flush(win->hook->connection);
 
@@ -510,7 +520,7 @@ WHIM_API(WhimWin* whimWinCreate, X11)(WhimRect rect, const char *title, WhimColo
 }
 
 WHIM_API(void whimWinSetTitle, X11)(WhimWin *win, const char *title) {
-    x11ChangeProperty(win, x11.atoms.name, x11.atoms.utf8_str, 8, WHIM_STRLEN(title), title);
+    x11ChangeProperty(win, x11.atoms.name, x11.atoms.utf8_str, 8, whim_core.strlen(title), title);
     x11.flush(win->hook->connection);
 }
 
@@ -519,7 +529,7 @@ WHIM_API(void whimWinDestroy, X11)(WhimWin *win)
     WhimPayload buffer[2] = {{4}}; buffer->as_16[1] = 2; buffer[1].as_32 = win->window_id;
     whimXcbSendRequest(win->hook, &buffer, sizeof(buffer));
     x11.flush(win->hook->connection);
-    WHIM_FREE(win);
+    whim_core.free(win, sizeof *win, whim_core.context);
 }
 
 WHIM_API(void whimDeinit, X11)(void)
@@ -535,12 +545,12 @@ WHIM_UTIL void x11ParseEvent(WhimPayload receiver[], WhimEvent *event)
     case KEY_PRESS:
         event->type = WHIM_EVENT_KEY;
         event->as_key.keycode = receiver->as_8[1] - 8;
-        event->as_key.is_pressed = 1;
+        event->as_key.is_pressed = WHIM_TRUE;
         break;
     case KEY_RELEASE:
         event->type = WHIM_EVENT_KEY;
         event->as_key.keycode = receiver->as_8[1] - 8;
-        event->as_key.is_pressed = 0;
+        event->as_key.is_pressed = WHIM_FALSE;
         break;
     case CLIENT_MESSAGE:
         if(receiver[3].as_32 != x11.atoms.close)
@@ -588,14 +598,14 @@ WHIM_API(void whimHookPollEvents, X11)(WhimHook *hook, WhimEvent *event)
 
 WHIM_API(WhimHook* whimHookSetup, X11)(enum WhimInitFlags flags)
 {
-    WhimHook *hook = WHIM_MALLOC(sizeof *hook);
+    WhimHook *hook = whim_core.alloc(sizeof *hook, whim_core.context);
     if(!hook)
         return 0;
 
     hook->connection = x11.connect(0, 0);
 
     if(!hook->connection) {
-        WHIM_FREE(hook);
+        whim_core.free(hook, sizeof *hook, whim_core.context);
         return 0;
     }
 
@@ -606,8 +616,9 @@ WHIM_API(WhimHook* whimHookSetup, X11)(enum WhimInitFlags flags)
 WHIM_API(void whimHookTerminate, X11)(WhimHook* hook)
 {
     x11.disconnect(hook->connection);
-    WHIM_FREE(hook);
+    whim_core.free(hook, sizeof *hook, whim_core.context);
 }
+
 #endif
 #endif
 
