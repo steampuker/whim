@@ -380,18 +380,18 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
 {
     WHIM_ASSERT(whim_core.alloc && whim_core.free && whim_core.strlen, "Core functions are not defined, initialize whim_core");
     if(!(x11.lib = dlopen("libxcb.so.1", RTLD_LAZY | RTLD_LOCAL)))
-        goto LIBRARY_FAIL;
+        return WHIM_FALSE;
 
     x11.connect = dlsym(x11.lib, "xcb_connect");
     x11.disconnect = dlsym(x11.lib, "xcb_disconnect");
 
     int screen;
     if(!(x11.hook.connection = x11.connect(0, &screen)))
-        goto CONNECT_FAIL;
+        return dlclose(x11.lib), WHIM_FALSE;
 
     whim_u32* root_window_ptr = x11ScreenOfDisplay(x11.hook.connection, screen);
     if(!root_window_ptr)
-        goto X11_FAIL;
+        return x11.disconnect(x11.hook.connection), dlclose(x11.lib), WHIM_FALSE;
 
     x11.sendRequest = dlsym(x11.lib, "xcb_send_request");
     x11.flush = dlsym(x11.lib, "xcb_flush");
@@ -420,13 +420,6 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
     x11RoundtripExtensions(&x11.hook);
 
     return WHIM_TRUE;
-
-X11_FAIL:
-    x11.disconnect(x11.hook.connection);
-CONNECT_FAIL:
-    dlclose(x11.lib);
-LIBRARY_FAIL:
-    return WHIM_FALSE;
 }
 
 enum { X11_WIN_BACKGROUND = 2, X11_WIN_EVENTS = 2048,
