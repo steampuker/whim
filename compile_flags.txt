@@ -1,0 +1,2 @@
+-DWHIM_IMPLEMENTATION
+-std=gnu99
