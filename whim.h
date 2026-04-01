@@ -235,7 +235,9 @@ struct WhimHook {
 };
 
 struct WhimX11Extensions {
-    struct { WhimPayload *syms, *types; whim_u16 syms_indices[248]; } xkb_keymap;
+    struct {
+        WhimPayload *syms, *types;
+        whim_u16 type_indices[256], syms_indices[248]; } xkb_keymap;
     struct { whim_u8 group, mods; } xkb_state;
     whim_u8 xkb, xkb_event;
 };
@@ -634,12 +636,10 @@ static void xkbGetMap(int map) // 1 = KeyType map, 2 = KeySym map
     int types_len = receiver[3].as_8[3];
 
     WhimPayload *cursor = xkb_ext->xkb_keymap.types = receiver + 10;
-    if(map & 1) for(int i = 0; i < types_len; ++i) {
-        whim_u8 mods_mask = cursor->as_8[0];
-        whim_u8 num_levels = cursor[1].as_8[0];
-        whim_u8 map_entries_len = cursor[1].as_8[1];
-        whim_bool preserve = cursor[1].as_8[2];
-        cursor += 2 + map_entries_len * (2 + preserve);
+    if(map & 1) for(int i = 0, index = 0; i < types_len; ++i) {
+        xkb_ext->xkb_keymap.type_indices[i] = index;
+        index += 2 + cursor[1].as_8[1] * (2 + cursor[1].as_8[2]);
+        cursor = xkb_ext->xkb_keymap.types + index;
     }
 
     xkb_ext->xkb_keymap.syms = cursor;
@@ -674,7 +674,55 @@ static void xkbSelectEvents(void)
     x11.flush(x11.hook.connection);
 }
 
-static whim_u32 capitalizeKeysym(whim_u32 k);
+WHIM_UTIL whim_bool xkbIsAlphabetic(whim_u32 k)
+{
+    static const whim_u64 latin[] = { 0x3FFFFFFULL, 0xC000000000000000ULL, 0x7FBFFFFFULL, 0, 0, 0x800000006F350000ULL, 0x2593CAB4ULL, 0, 0, 0xD210000ULL, 0x30900030ULL, 0, 0, 0x800000004E340002ULL, 0x31074840ULL};
+    static const whim_u64 cyrgr[] = { 0x7FFFFFFF80007FFFULL, 0, 0, 0, 0x7FF0000ULL, 0x1FFFFFFULL};
+    static const whim_u64 misc1[] = { 0x1ULL, 0x10000000000500ULL, 0x400002000000208ULL, 0, 0x100000000000ULL, 0x2000000100ULL};
+    static const whim_u64 misc2[] = { 0x15150010511ULL, 0x10410040ULL, 0, 0xFFFFFFFFFC000ULL };
+    static const whim_u64 misc3[] = { 0x4010000010000101ULL, 0x4000010040100000ULL, 0x5555555540000105ULL, 0x55555555555555ULL };
+
+    enum { BIT_BOUND = sizeof(whim_u64) * 8, OFFSET_LATIN = 0x61, OFFSET_CYRGR = 0x6A1, OFFSET_MISC1 = 0x100012D, OFFSET_MISC2 = 0x1000493, OFFSET_MISC3 = 0x1001E03 };
+    whim_u32 group = (k - OFFSET_LATIN < WHIM_ARRLEN(latin) * BIT_BOUND) << 0 |
+                     (k - OFFSET_CYRGR < WHIM_ARRLEN(cyrgr) * BIT_BOUND) << 1 |
+                     (k - OFFSET_MISC1 < WHIM_ARRLEN(misc1) * BIT_BOUND) << 2 |
+                     (k - OFFSET_MISC2 < WHIM_ARRLEN(misc2) * BIT_BOUND) << 3 |
+                     (k - OFFSET_MISC3 < WHIM_ARRLEN(misc3) * BIT_BOUND) << 4;
+
+    const whim_u64* result;
+    switch(group) {
+        case 0x1:  k -= OFFSET_LATIN; result = latin; break;
+        case 0x2:  k -= OFFSET_CYRGR; result = cyrgr; break;
+        case 0x4:  k -= OFFSET_MISC1; result = misc1; break;
+        case 0x8:  k -= OFFSET_MISC2; result = misc2; break;
+        case 0x10: k -= OFFSET_MISC3; result = misc3; break;
+        default: return 0;
+    }
+
+    return result[k / BIT_BOUND] >> k % BIT_BOUND & 1;
+}
+
+WHIM_UTIL whim_u8 xkbGetShiftLevel(whim_u32 kt_index, whim_u8 width, whim_u8 modifiers)
+{
+    whim_u32 level = 0;
+    WhimPayload *cursor = x11.extensions.xkb_keymap.types + x11.extensions.xkb_keymap.type_indices[kt_index];
+
+    whim_u8 mods_mask = cursor->as_8[0];
+    whim_u8 map_entries_len = cursor[1].as_8[1];
+    whim_u8 current_mods = modifiers & mods_mask;
+    //whim_u8 num_levels = cursor[1].as_8[0];
+    //whim_bool preserve = cursor[1].as_8[2]; // What is this for
+
+    for(int i = 0; i < map_entries_len; ++i) {
+        if(cursor[2 + i].as_8[0] && (cursor[2 + i].as_8[2] == current_mods)) {
+            level = cursor[2 + i].as_8[1] % width;
+            break;
+        }
+    }
+
+    return level;
+}
+
 static whim_u32 xkbKeycodeToKesysym(whim_u32 keycode, whim_u8 group, whim_u8 modifiers)
 {
     const whim_u16 offset = x11.extensions.xkb_keymap.syms_indices[keycode];
@@ -693,68 +741,28 @@ static whim_u32 xkbKeycodeToKesysym(whim_u32 keycode, whim_u8 group, whim_u8 mod
         }
 
     whim_u8 kt_index = keysyms[offset].as_8[group];
-    whim_u32 level = 0;
-    {
-        WhimPayload *cursor = x11.extensions.xkb_keymap.types;
-        for(int i = 0; i < kt_index; ++i) {
-            whim_u8 mods_mask = cursor->as_8[0];
-            whim_u8 num_levels = cursor[1].as_8[0];
-            whim_u8 map_entries_len = cursor[1].as_8[1];
-            whim_bool preserve = cursor[1].as_8[2];
-            cursor += 2 + map_entries_len * (2 + preserve);
-        }
+    const WhimPayload *current_keysym = &keysyms[offset + group * width + 2];
+    whim_u32 level = xkbGetShiftLevel(kt_index, width, modifiers);
 
-        whim_u8 mods_mask = cursor->as_8[0];
-        whim_u8 num_levels = cursor[1].as_8[0];
-        whim_u8 map_entries_len = cursor[1].as_8[1];
-        whim_bool preserve = cursor[1].as_8[2];
+    WHIM_ASSERT(keysyms[offset + 1].as_16[1] >= group * width + level, "keycodeToKeysym: Out of bounds");
 
-        whim_u8 current_mods = modifiers & mods_mask;
-
-        for(int i = 0; i < map_entries_len; ++i) {
-            if(cursor[2 + i].as_8[0] && (cursor[2 + i].as_8[2] == current_mods)) {
-                level = cursor[2 + i].as_8[1];
-                break;
-            }
-        }
+    if(level == 0 && !(modifiers & 1)) {
+        level |= (modifiers & 2) && xkbIsAlphabetic(current_keysym[level].as_32);
+        level |= (modifiers & 16) && ((current_keysym[1].as_32 - 0xFFB0) <= 9);
     }
 
-    level = (level >= width) ? 0 : level;
 
-    whim_u32 entry = group * width + level;
-    WHIM_ASSERT(keysyms[offset + 1].as_16[1] >= entry, "keycodeToKeysym: Out of bounds");
-
-    if(modifiers & 2 && !(modifiers & 1))
-        return capitalizeKeysym(keysyms[offset + entry + 2].as_32);
-
-    return keysyms[offset + entry + 2].as_32;
-}
-
-static whim_u32 capitalizeKeysym(whim_u32 k)
-{   // TODO: replace case ranges with if conditions
-    switch(k) {
-        case 0x03bf: return 0x03bd;
-
-        case 0x01b1 ... 0x01bf: // Latin-2
-        case 0x02b1 ... 0x02bc: // Latin-3
-        case 0x03b3 ... 0x03bc: // Latin-4
-        case 0x06a1 ... 0x06af: // Cyrillic
-        case 0x07b1 ... 0x07bb: return k ^ 0x10; // Greek
-
-        case 0x0061 ... 0x00fe: // Latin-1
-        case 0x01e0 ... 0x01fe:
-        case 0x02e5 ... 0x02fe:
-        case 0x06c0 ... 0x06df:
-        case 0x07e1 ... 0x07f9: return k ^ 0x20;
-
-        default: return k;
-    }
+    return current_keysym[level].as_32;
 }
 
 whim_u8 keysymToCodepoint(whim_u32 keysym)
 {
-    if(keysym <= 0x00ff) // Latin-1
-        return keysym;
+    if(keysym <= 0x00ff || keysym & 0x1000000) // Latin-1 + Unicode
+        return keysym & 0xFFFFFF;
+
+    if(keysym - 0xFFB0 <= 9) {
+        return (keysym & ~0xFFB0) + '0';
+    }
 
     return 0;
 }
