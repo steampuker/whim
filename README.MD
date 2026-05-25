@@ -56,7 +56,7 @@ C++ is not supported.
 PRs are welcome!
 
 <details>
-<summary>Development</summary>
+<summary><h2>Development</h2></summary>
 
 > Previously, all development happened directly inside `whim.h`. As of May 2026, this is no longer accepted.
 
