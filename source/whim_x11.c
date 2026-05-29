@@ -4,6 +4,14 @@
 #include <errno.h>
 #include <dlfcn.h>
 #include <poll.h>
+#include <sys/uio.h>
+
+#if defined(EXIT_SUCCESS) || defined(WHIM_SANITIZE)
+    #include <stdlib.h>
+    #define x11Free free
+#else
+    static void (*x11Free)(void*);
+#endif
 
 typedef union { whim_u8 as_8[4]; whim_u16 as_16[2]; whim_u32 as_32; } WhimUnit;
 #define WhimTypedUnit(init_type) union { init_type init[sizeof(whim_u32[1]) / sizeof(init_type)]; whim_u8 as_8[4]; whim_u16 as_16[2]; whim_u32 as_32; WhimUnit as_unit; }
@@ -15,7 +23,6 @@ struct WhimWin {
 };
 
 struct xcb__req { size_t count; void *ext; whim_u8 opcode, isvoid; };
-struct xcb__iovec { void* base; size_t len; };
 
 struct WhimXcbHook {
     void *connection;
@@ -31,10 +38,9 @@ static struct WhimX11State {
     void (*disconnect)(void*);
     int (*getFileDesc)(void*);
     whim_u32 (*generateID)(void*);
-    int (*sendRequest)(void*, int, struct xcb__iovec*, struct xcb__req*);
+    int (*sendRequest)(void*, int, struct iovec*, struct xcb__req*);
     void* (*checkEventQueue)(void*);
     void* (*getReply)(void*, unsigned int, void**);
-    void (*free)(void*);
     int (*flush)(void*);
 
     struct WhimXcbHook hook;
@@ -47,44 +53,39 @@ static struct WhimX11State {
     whim_u32 screens, root_window;
 } x11;
 
-
-WHIM_UTIL void whimXcbSendRequest(void *WHIM_NOALIAS connection, void* WHIM_NOALIAS payload, size_t payload_length)
+WHIM_UTIL int whimXcbSendRequest(void *WHIM_NOALIAS connection, void* WHIM_NOALIAS payload, size_t payload_size)
 {
     struct xcb__req req[1] = {1, 0, 0, 1};
-    struct xcb__iovec iovec[2] = {{payload, payload_length}};
+    struct iovec iovec[2] = {payload, payload_size};
     int result = x11.sendRequest(connection, 2, iovec, req);
     WHIM_ASSERT(result, "Invalid data handling");
+    return result;
 }
 
-WHIM_UTIL void whimXcbSendRequestMix(void *WHIM_NOALIAS connection, whim_u32 count, void* WHIM_NOALIAS buffers[], whim_u32 lengths[])
+WHIM_UTIL int whimXcbSendRequestMix(void *WHIM_NOALIAS connection, whim_u32 count, void* WHIM_NOALIAS buffers[], whim_u32 sizes[])
 {
     enum { IOVEC_MAX = 4 };
     WHIM_ASSERT(count * 2 <= IOVEC_MAX, "iovec limit exceeded");
 
     struct xcb__req req[1] = {count * 2, 0, 0, 1};
-    struct xcb__iovec iovec[IOVEC_MAX];
+    struct iovec iovec[IOVEC_MAX];
     for(int i = 0; i < count; ++i) {
-        iovec[i * 2].base = buffers[i];
-        iovec[i * 2].len = lengths[i];
-        iovec[i * 2 + 1].base = buffers[i];
-        iovec[i * 2 + 1].len = -lengths[i] & 3;
+        iovec[i * 2].iov_base = buffers[i];
+        iovec[i * 2].iov_len = sizes[i];
+        iovec[i * 2 + 1].iov_base = buffers[i];
+        iovec[i * 2 + 1].iov_len = -sizes[i] & 3;
     }
 
     int result = x11.sendRequest(connection, 2, iovec, req);
     WHIM_ASSERT(result, "Invalid data handling");
+    return result;
 }
 
 WHIM_UTIL whim_bool whimPollReceive(whim_u32 file_desc, WhimUnit *receiver, whim_u32 size) {
     enum { POLL_TIMEOUT = 5000 };
     struct pollfd fd_poll[1] = {file_desc, POLLIN};
 
-    if(poll(fd_poll, 1, POLL_TIMEOUT) <= 0)
-        return 0;
-
-    if(read(file_desc, receiver, size) <= 0)
-        return 0;
-
-    return 1;
+    return poll(fd_poll, 1, POLL_TIMEOUT) > 0 && read(file_desc, receiver, size) > 0;
 }
 
 #define X11_INTERN_ATOM(hook, str) x11String8Req(hook, 16, str, sizeof(str) - 1)
@@ -131,20 +132,20 @@ WHIM_UTIL void x11RoundtripExtensions(struct WhimXcbHook *hook)
     enum {XKB_MAJOR = 1, XKB_MINOR = 0};
     WhimUnit xkb_receiver[8];
 
-    if(whimPollReceive(hook->file_desc, xkb_receiver, sizeof xkb_receiver)) do { // Initialize xkb
+    if(whimPollReceive(hook->file_desc, xkb_receiver, sizeof xkb_receiver)) do {
         if(!xkb_receiver->as_8[0] || !xkb_receiver[2].as_8[0])
-            break; // xkb is not present
+            break;
 
         whim_u8 opcode = xkb_receiver[2].as_8[1];
 
         WhimTypedUnit(whim_u16) buffer[2] = {0, WHIM_ARRLEN(buffer), XKB_MAJOR, XKB_MINOR};
         buffer->as_8[0] = opcode;
-        buffer->as_8[1] = 0; // Use xkb
+        buffer->as_8[1] = 0;
         whimXcbSendRequest(hook->connection, buffer, sizeof buffer);
 
         WhimTypedUnit(whim_u32) buffer2[7] = {0, 0, 1, 1};
         buffer2->as_8[0] = opcode;
-        buffer2->as_8[1] = 21; // Set autorepeat
+        buffer2->as_8[1] = 21;
         buffer2->as_16[1] = WHIM_ARRLEN(buffer2);
         buffer2[1].as_16[0] = 256;
         whimXcbSendRequest(hook->connection, buffer2, sizeof buffer2);
@@ -153,13 +154,13 @@ WHIM_UTIL void x11RoundtripExtensions(struct WhimXcbHook *hook)
 
         if(!whimPollReceive(hook->file_desc, xkb_receiver, sizeof xkb_receiver) ||
            !xkb_receiver->as_8[0] || !xkb_receiver[2].as_8[0])
-            break; // Can't use xkb
+            break;
 
         hook->xkb = opcode;
 
         if(!whimPollReceive(hook->file_desc, xkb_receiver, sizeof xkb_receiver) ||
            !xkb_receiver->as_8[0] || !xkb_receiver[2].as_8[0])
-            break; // Autorepeat unsupported
+            break;
     } while(0);
 }
 
@@ -172,12 +173,13 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
     x11.connect = dlsym(x11.lib, "xcb_connect");
     x11.disconnect = dlsym(x11.lib, "xcb_disconnect");
 
-    int screen;
-    if(!(x11.hook.connection = x11.connect(0, &screen)))
-        return dlclose(x11.lib), WHIM_FALSE;
+    int (*hasError)(void*) = dlsym(x11.lib, "xcb_connection_has_error");
 
-    whim_u32* root_window_ptr = x11ScreenOfDisplay(x11.hook.connection, screen);
-    if(!root_window_ptr)
+    int screen;
+    whim_u32* root_window_ptr;
+
+    x11.hook.connection = x11.connect(0, &screen);
+    if(hasError(x11.hook.connection) || !(root_window_ptr = x11ScreenOfDisplay(x11.hook.connection, screen)))
         return x11.disconnect(x11.hook.connection), dlclose(x11.lib), WHIM_FALSE;
 
     x11.sendRequest = dlsym(x11.lib, "xcb_send_request");
@@ -189,8 +191,7 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
     X11_INTERN_ATOM(x11.hook.connection, "_NET_WM_NAME");
     X11_INTERN_ATOM(x11.hook.connection, "UTF8_STRING");
 
-    X11_QUERY_EXT(x11.hook.connection, "XKEYBOARD");
-    //X11_QUERY_EXT(x11.hook.con, "RANDR");
+    X11_QUERY_EXT(x11.hook.connection, "XKEYBOARD"); // "RANDR"
 
     x11.flush(x11.hook.connection);
 
@@ -199,7 +200,9 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
     x11.generateID = dlsym(x11.lib, "xcb_generate_id");
     x11.getReply = dlsym(x11.lib, "xcb_wait_for_reply");
 
-    x11.free = dlsym(x11.lib, "free");
+#if !defined(EXIT_SUCCESS)
+    x11Free = dlsym(x11.lib, "free");
+#endif
 
     x11.hook.file_desc = x11.getFileDesc(x11.hook.connection);
     x11.root_window = *root_window_ptr;
@@ -342,15 +345,15 @@ WHIM_UTIL void x11ParseEvent(WhimUnit receiver[], WhimEvent *event)
 WHIM_API(void whimPollEvents, X11)(WhimEvent *event)
 {
     /* NOTICE: WHIM assumes that xcb events have the same layout as the payload, technically this breaks strict aliasing */
-    WhimUnit receiver[8];
     WhimUnit *queued_event = (WhimUnit*)x11.checkEventQueue(x11.hook.connection);
 
     if(queued_event) {
         x11ParseEvent(queued_event, event);
-        x11.free(queued_event);
+        x11Free(queued_event);
         return;
     }
 
+    WhimUnit receiver[8];
     int bytes_read = read(x11.hook.file_desc, &receiver, sizeof(receiver));
     if(bytes_read <= 0) {
         WHIM_ASSERT(bytes_read != 0, "TODO: Handle connection close");
@@ -367,3 +370,22 @@ WHIM_API(void whimPollEvents, X11)(WhimEvent *event)
 
     x11ParseEvent(receiver, event);
 }
+
+/*
+WHIM_UTIL WhimUnit* x11GetAtomName(whim_u32 atom, whim_u16 *length) {
+    WhimTypedUnit(whim_u8) buffer[2] = {17};
+    buffer->as_16[1] = WHIM_ARRLEN(buffer);
+    buffer[1].as_32 = atom;
+
+    int seq = whimXcbSendRequest(x11.hook.connection, buffer, sizeof buffer);
+    x11.flush(x11.hook.connection);
+
+    WhimUnit *reply = x11.getReply(x11.hook.connection, seq, 0);
+    if(!reply)
+        return 0;
+
+    *length = reply[2].as_16[0];
+
+    return reply;
+}
+*/

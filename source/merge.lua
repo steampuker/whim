@@ -1,3 +1,4 @@
+#!/usr/bin/env lua
 local newline = '\r\n'
 
 local defines = {
