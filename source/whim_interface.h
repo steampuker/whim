@@ -63,8 +63,8 @@ typedef struct WhimWin WhimWin;
 enum {
     WHIM_EVENT_NONE,
     WHIM_EVENT_INTERNAL,
+    WHIM_EVENT_CLOSE,
     WHIM_EVENT_KEY,
-    WHIM_EVENT_CLOSE
 };
 
 typedef struct WhimEventKey {
@@ -76,7 +76,7 @@ typedef struct WhimEventKey {
 
 typedef struct WhimEventClose {
     whim_u32 type;
-    whim_u32 window_id;
+    whim_u32 window_id; // If it's 0, assume the whole app is to be closed
 } WhimEventClose;
 
 // struct WhimMouseMotionEvent {};

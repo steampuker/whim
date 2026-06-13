@@ -90,7 +90,7 @@ WHIM_UTIL whim_bool whimPollReceive(whim_u32 file_desc, WhimUnit *receiver, whim
 
 #define X11_INTERN_ATOM(hook, str) x11String8Req(hook, 16, str, sizeof(str) - 1)
 #define X11_QUERY_EXT(hook, str) x11String8Req(hook, 98, str, sizeof(str) - 1)
-WHIM_UTIL void x11String8Req(void *WHIM_NOALIAS connection, whim_u8 req, const char* WHIM_NOALIAS str, whim_u32 str_len)
+WHIM_UTIL void x11String8Req(void* WHIM_NOALIAS connection, whim_u8 req, const char* WHIM_NOALIAS str, whim_u32 str_len)
 {
     WhimTypedUnit(whim_u16) buffer[2] = { 0, WHIM_ARRLEN(buffer) + (str_len + 3) / 4, str_len };
     buffer->as_8[0] = req;
@@ -152,21 +152,19 @@ WHIM_UTIL void x11RoundtripExtensions(struct WhimXcbHook *hook)
 
         x11.flush(hook->connection);
 
-        if(!whimPollReceive(hook->file_desc, xkb_receiver, sizeof xkb_receiver) ||
-           !xkb_receiver->as_8[0] || !xkb_receiver[2].as_8[0])
+        if(!whimPollReceive(hook->file_desc, xkb_receiver, sizeof xkb_receiver) || !xkb_receiver->as_8[0] || !xkb_receiver[2].as_8[0])
             break;
 
         hook->xkb = opcode;
 
-        if(!whimPollReceive(hook->file_desc, xkb_receiver, sizeof xkb_receiver) ||
-           !xkb_receiver->as_8[0] || !xkb_receiver[2].as_8[0])
+        if(!whimPollReceive(hook->file_desc, xkb_receiver, sizeof xkb_receiver) || !xkb_receiver->as_8[0] || !xkb_receiver[2].as_8[0])
             break;
     } while(0);
 }
 
 WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
 {
-    WHIM_ASSERT(whim_core.alloc && whim_core.free && whim_core.strlen, "Core functions are not defined, initialize whim_core");
+    WHIM_ASSERT(whim_core.allocator.alloc, "Core functions are not defined, initialize whim_core");
     if(!(x11.lib = dlopen("libxcb.so.1", RTLD_LAZY | RTLD_LOCAL)))
         return WHIM_FALSE;
 
@@ -180,7 +178,7 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
 
     x11.hook.connection = x11.connect(0, &screen);
     if(hasError(x11.hook.connection) || !(root_window_ptr = x11ScreenOfDisplay(x11.hook.connection, screen)))
-        return x11.disconnect(x11.hook.connection), dlclose(x11.lib), WHIM_FALSE;
+        return whimDeinit(), WHIM_FALSE;
 
     x11.sendRequest = dlsym(x11.lib, "xcb_send_request");
     x11.flush = dlsym(x11.lib, "xcb_flush");
@@ -200,7 +198,7 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
     x11.generateID = dlsym(x11.lib, "xcb_generate_id");
     x11.getReply = dlsym(x11.lib, "xcb_wait_for_reply");
 
-#if !defined(EXIT_SUCCESS)
+#ifndef EXIT_SUCCESS
     x11Free = dlsym(x11.lib, "free");
 #endif
 
@@ -272,8 +270,9 @@ WHIM_UTIL void x11ChangeProperty(WhimWin *WHIM_NOALIAS win, whim_u32 property, w
 
 WHIM_API(WhimWin* whimWinCreate, X11)(WhimRect *rect, const char *title, WhimColor *clear_color, enum WhimWinFlags flags)
 {
-    WhimWin* win = whim_core.alloc(sizeof *win, whim_core.context);
-    if(!win) return 0;
+    WhimWin* win = whim_core.allocator.alloc(whim_core.allocator.context, sizeof *win);
+    if(!win)
+        return 0;
 
     *(whim_u32*)&win->window_id = x11.generateID(x11.hook.connection);
 
@@ -300,79 +299,77 @@ WHIM_API(void whimWinSetTitle, X11)(WhimWin *win, const char *title)
 
 WHIM_API(void whimWinDestroy, X11)(WhimWin *win)
 {
-    WhimUnit buffer[2] = {4};
-    buffer->as_16[1] = WHIM_ARRLEN(buffer);
-
-    buffer[1].as_32 = win->window_id;
-    whimXcbSendRequest(x11.hook.connection, &buffer, sizeof(buffer));
+    if(x11.lib) {
+        WhimUnit buffer[2] = {4};
+        buffer->as_16[1] = WHIM_ARRLEN(buffer);
+        buffer[1].as_32 = win->window_id;
+        whimXcbSendRequest(x11.hook.connection, &buffer, sizeof(buffer));
+    }
 
     x11.flush(x11.hook.connection);
-    whim_core.free(win, sizeof *win, whim_core.context);
+    whim_core.allocator.free(whim_core.allocator.context, win, sizeof *win);
 }
 
 WHIM_API(void whimDeinit, X11)(void)
 {
+    if(!x11.lib)
+        return;
+
     x11.disconnect(x11.hook.connection);
     dlclose(x11.lib);
+    x11.lib = 0;
 }
 
-WHIM_UTIL void x11ParseEvent(WhimUnit receiver[], WhimEvent *event)
+WHIM_UTIL void whimParseX11Event(WhimUnit receiver[], WhimEvent *event)
 {
-    enum {KEY_PRESS = 2, KEY_RELEASE = 3, CLIENT_MESSAGE = 33};
-    switch(receiver->as_8[0] & (whim_u8)~0x80) {
+    switch(receiver->as_8[0] & (whim_u8)~0x80) { enum {KEY_PRESS = 2, KEY_RELEASE = 3, CLIENT_MESSAGE = 33};
     case KEY_PRESS:
         event->type = WHIM_EVENT_KEY;
         event->as_key.keycode = receiver->as_8[1] - 8;
         event->as_key.is_pressed = WHIM_TRUE;
-        break;
+        return;
     case KEY_RELEASE:
         event->type = WHIM_EVENT_KEY;
         event->as_key.keycode = receiver->as_8[1] - 8;
         event->as_key.is_pressed = WHIM_FALSE;
-        break;
+        return;
     case CLIENT_MESSAGE:
         if(receiver[3].as_32 != x11.atoms.values.close)
             break;
 
         event->type = WHIM_EVENT_CLOSE;
         event->as_close.window_id = receiver[1].as_32;
-        break;
-    default:
-        event->type = WHIM_EVENT_NONE;
+        return;
     }
+
+    event->type = WHIM_EVENT_NONE;
 }
 
 WHIM_API(void whimPollEvents, X11)(WhimEvent *event)
 {
-    /* NOTICE: WHIM assumes that xcb events have the same layout as the payload, technically this breaks strict aliasing */
-    WhimUnit *queued_event = (WhimUnit*)x11.checkEventQueue(x11.hook.connection);
+    WhimUnit *queued_event = (WhimUnit*)x11.checkEventQueue(x11.hook.connection); // Pray it works as intended
 
-    if(queued_event) {
-        x11ParseEvent(queued_event, event);
-        x11Free(queued_event);
-        return;
-    }
+    if(queued_event)
+        return whimParseX11Event(queued_event, event), x11Free(queued_event);
 
     WhimUnit receiver[8];
     int bytes_read = read(x11.hook.file_desc, &receiver, sizeof(receiver));
-    if(bytes_read <= 0) {
-        WHIM_ASSERT(bytes_read != 0, "TODO: Handle connection close");
-        WHIM_ASSERT(errno == EAGAIN, "TODO: Handle read errors");
 
-        event->type = WHIM_EVENT_NONE;
-        return;
-    }
+    if(bytes_read == 0)
+        return event->type = WHIM_EVENT_CLOSE, event->as_close.window_id = 0, (void)0;
+    else if(bytes_read < 0)
+        return errno == EAGAIN ? (void)(event->type = WHIM_EVENT_NONE) : WHIM_ASSERT(0, "Event read error");
 
     // if(receiver->as_8[0] == 0) printf("Error happened: %d \n", receiver->as_8[1]);
 
     WHIM_ASSERT(receiver->as_8[0] != 0, "TODO: Create proper error handling");
     WHIM_ASSERT(receiver->as_8[0] != 1, "TODO: How do we even handle replies here?");
 
-    x11ParseEvent(receiver, event);
+    whimParseX11Event(receiver, event);
 }
 
 /*
-WHIM_UTIL WhimUnit* x11GetAtomName(whim_u32 atom, whim_u16 *length) {
+WHIM_UTIL char* x11GetAtomName(whim_u32 atom, whim_u32 *length) {
     WhimTypedUnit(whim_u8) buffer[2] = {17};
     buffer->as_16[1] = WHIM_ARRLEN(buffer);
     buffer[1].as_32 = atom;
@@ -386,6 +383,10 @@ WHIM_UTIL WhimUnit* x11GetAtomName(whim_u32 atom, whim_u16 *length) {
 
     *length = reply[2].as_16[0];
 
-    return reply;
+    WhimUnit* ret = whim_core.allocator.alloc(whim_core.allocator.context, *length);
+    whim_core.memcpy(reply + 8, ret, *length);
+
+    x11Free(reply);
+    return (char*)ret;
 }
 */
