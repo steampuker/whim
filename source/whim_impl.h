@@ -54,7 +54,7 @@ WHIM_UTIL whim_bool whimRingbufEmpty(WhimRingbuf *cursors, whim_size_t size) { r
     Moves the write cursor, moves read cursor on overflow, returns index for write.
     Example use: arr[whimRingBufWrite(cursors, sizeof arr)] = a;
 */
-WHIM_UTIL whim_u32 whimRingbufWrite(WhimRingbuf *cursors, whim_size_t size) {
+WHIM_UTIL whim_rb_index whimRingbufWrite(WhimRingbuf *cursors, whim_size_t size) {
     WHIM_ASSERT(size && !(size & (size - 1)), "Size must be a power of 2");
 
     whim_rb_index old_cursor = (*cursors)[WHIM_RINGBUF_WRITE];
@@ -68,11 +68,11 @@ WHIM_UTIL whim_u32 whimRingbufWrite(WhimRingbuf *cursors, whim_size_t size) {
 }
 
 /*
-    Moves the read cursor if the buffer is not empty, returns index for read.
+    Moves the read cursor if the buffer is not empty, returns index for read. If empty, return -1.
     Example use:
         if(i = whimRingbufRead(cursors, sizeof arr), i != -1) arr[i]...
 */
-WHIM_UTIL whim_u32 whimRingbufRead(WhimRingbuf *cursors, whim_size_t size) {
+WHIM_UTIL whim_rb_index whimRingbufRead(WhimRingbuf *cursors, whim_size_t size) {
     WHIM_ASSERT(size && !(size & (size - 1)), "Size must be a power of 2");
     if(whimRingbufEmpty(cursors, size))
         return -1;

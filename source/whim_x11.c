@@ -1,7 +1,6 @@
 #include "whim_impl.h"
 
 #include <unistd.h>
-#include <errno.h>
 #include <dlfcn.h>
 #include <poll.h>
 #include <sys/uio.h>
@@ -36,7 +35,6 @@ static struct WhimX11State {
 
     void* (*connect)(char*, int*);
     void (*disconnect)(void*);
-    int (*getFileDesc)(void*);
     whim_u32 (*generateID)(void*);
     int (*sendRequest)(void*, int, struct iovec*, struct xcb__req*);
     void* (*checkEventQueue)(void*);
@@ -81,15 +79,14 @@ WHIM_UTIL int whimXcbSendRequestMix(void *WHIM_NOALIAS connection, whim_u32 coun
     return result;
 }
 
-WHIM_UTIL whim_bool whimPollReceive(whim_u32 file_desc, WhimUnit *receiver, whim_u32 size) {
-    enum { POLL_TIMEOUT = 5000 };
-    struct pollfd fd_poll[1] = {file_desc, POLLIN};
-
+WHIM_UTIL whim_bool whimPollReceive(whim_u32 file_desc, WhimUnit *receiver, whim_u32 size)
+{
+    enum { POLL_TIMEOUT = 5000 }; struct pollfd fd_poll[1] = {file_desc, POLLIN};
     return poll(fd_poll, 1, POLL_TIMEOUT) > 0 && read(file_desc, receiver, size) > 0;
 }
 
-#define X11_INTERN_ATOM(hook, str) x11String8Req(hook, 16, str, sizeof(str) - 1)
-#define X11_QUERY_EXT(hook, str) x11String8Req(hook, 98, str, sizeof(str) - 1)
+#define X11_INTERN_ATOM(str) x11String8Req(x11.hook.connection, 16, str, sizeof(str) - 1)
+#define X11_QUERY_EXT(str) x11String8Req(x11.hook.connection, 98, str, sizeof(str) - 1)
 WHIM_UTIL void x11String8Req(void* WHIM_NOALIAS connection, whim_u8 req, const char* WHIM_NOALIAS str, whim_u32 str_len)
 {
     WhimTypedUnit(whim_u16) buffer[2] = { 0, WHIM_ARRLEN(buffer) + (str_len + 3) / 4, str_len };
@@ -118,13 +115,8 @@ WHIM_UTIL whim_u32* x11ScreenOfDisplay(void *connection, int screen)
 WHIM_UTIL void x11RoundtripAtoms(whim_u32 file_desc)
 {
     WhimUnit receiver[8];
-
-    for(size_t i = 0; i < WHIM_ARRLEN(x11.atoms.elements); i++) {
-        if(!whimPollReceive(file_desc, receiver, sizeof receiver))
-            continue;
-
-        x11.atoms.elements[i] = receiver[2].as_32;
-    }
+    for(size_t i = 0; i < WHIM_ARRLEN(x11.atoms.elements); i++)
+        whimPollReceive(file_desc, receiver, sizeof receiver) ? (x11.atoms.elements[i] = receiver[2].as_32) : 0;
 }
 
 WHIM_UTIL void x11RoundtripExtensions(struct WhimXcbHook *hook)
@@ -139,15 +131,11 @@ WHIM_UTIL void x11RoundtripExtensions(struct WhimXcbHook *hook)
         whim_u8 opcode = xkb_receiver[2].as_8[1];
 
         WhimTypedUnit(whim_u16) buffer[2] = {0, WHIM_ARRLEN(buffer), XKB_MAJOR, XKB_MINOR};
-        buffer->as_8[0] = opcode;
-        buffer->as_8[1] = 0;
+        buffer->as_8[0] = opcode, buffer->as_8[1] = 0;
         whimXcbSendRequest(hook->connection, buffer, sizeof buffer);
 
         WhimTypedUnit(whim_u32) buffer2[7] = {0, 0, 1, 1};
-        buffer2->as_8[0] = opcode;
-        buffer2->as_8[1] = 21;
-        buffer2->as_16[1] = WHIM_ARRLEN(buffer2);
-        buffer2[1].as_16[0] = 256;
+        buffer2->as_8[0] = opcode, buffer2->as_8[1] = 21, buffer2->as_16[1] = WHIM_ARRLEN(buffer2), buffer2[1].as_16[0] = 256;
         whimXcbSendRequest(hook->connection, buffer2, sizeof buffer2);
 
         x11.flush(hook->connection);
@@ -184,17 +172,13 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
     x11.flush = dlsym(x11.lib, "xcb_flush");
 
     // Ensure this is in the same order as x11.atoms
-    X11_INTERN_ATOM(x11.hook.connection, "WM_PROTOCOLS");
-    X11_INTERN_ATOM(x11.hook.connection, "WM_DELETE_WINDOW");
-    X11_INTERN_ATOM(x11.hook.connection, "_NET_WM_NAME");
-    X11_INTERN_ATOM(x11.hook.connection, "UTF8_STRING");
-
-    X11_QUERY_EXT(x11.hook.connection, "XKEYBOARD"); // "RANDR"
+    X11_INTERN_ATOM("WM_PROTOCOLS"), X11_INTERN_ATOM("WM_DELETE_WINDOW"), X11_INTERN_ATOM("_NET_WM_NAME"), X11_INTERN_ATOM("UTF8_STRING");
+    X11_QUERY_EXT("XKEYBOARD"); // "RANDR"
 
     x11.flush(x11.hook.connection);
 
-    x11.getFileDesc = dlsym(x11.lib, "xcb_get_file_descriptor");
-    x11.checkEventQueue = dlsym(x11.lib, "xcb_poll_for_queued_event");
+    int (*getFileDesc)(void*) = dlsym(x11.lib, "xcb_get_file_descriptor");
+    x11.checkEventQueue = dlsym(x11.lib, "xcb_poll_for_event");
     x11.generateID = dlsym(x11.lib, "xcb_generate_id");
     x11.getReply = dlsym(x11.lib, "xcb_wait_for_reply");
 
@@ -202,7 +186,7 @@ WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
     x11Free = dlsym(x11.lib, "free");
 #endif
 
-    x11.hook.file_desc = x11.getFileDesc(x11.hook.connection);
+    x11.hook.file_desc = getFileDesc(x11.hook.connection);
     x11.root_window = *root_window_ptr;
 
     x11RoundtripAtoms(x11.hook.file_desc);
@@ -312,12 +296,7 @@ WHIM_API(void whimWinDestroy, X11)(WhimWin *win)
 
 WHIM_API(void whimDeinit, X11)(void)
 {
-    if(!x11.lib)
-        return;
-
-    x11.disconnect(x11.hook.connection);
-    dlclose(x11.lib);
-    x11.lib = 0;
+    return x11.lib ? (x11.disconnect(x11.hook.connection), dlclose(x11.lib), x11.lib = 0) : (void)0;
 }
 
 WHIM_UTIL void whimParseX11Event(WhimUnit receiver[], WhimEvent *event)
@@ -348,24 +327,7 @@ WHIM_UTIL void whimParseX11Event(WhimUnit receiver[], WhimEvent *event)
 WHIM_API(void whimPollEvents, X11)(WhimEvent *event)
 {
     WhimUnit *queued_event = (WhimUnit*)x11.checkEventQueue(x11.hook.connection); // Pray it works as intended
-
-    if(queued_event)
-        return whimParseX11Event(queued_event, event), x11Free(queued_event);
-
-    WhimUnit receiver[8];
-    int bytes_read = read(x11.hook.file_desc, &receiver, sizeof(receiver));
-
-    if(bytes_read == 0)
-        return event->type = WHIM_EVENT_CLOSE, event->as_close.window_id = 0, (void)0;
-    else if(bytes_read < 0)
-        return errno == EAGAIN ? (void)(event->type = WHIM_EVENT_NONE) : WHIM_ASSERT(0, "Event read error");
-
-    // if(receiver->as_8[0] == 0) printf("Error happened: %d \n", receiver->as_8[1]);
-
-    WHIM_ASSERT(receiver->as_8[0] != 0, "TODO: Create proper error handling");
-    WHIM_ASSERT(receiver->as_8[0] != 1, "TODO: How do we even handle replies here?");
-
-    whimParseX11Event(receiver, event);
+    return queued_event ? (whimParseX11Event(queued_event, event), x11Free(queued_event)) : (event->type = WHIM_EVENT_NONE);
 }
 
 /*
