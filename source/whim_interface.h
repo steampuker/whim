@@ -69,14 +69,14 @@ enum {
 
 typedef struct WhimEventKey {
     whim_u32 type;
-    whim_u32 keysym;
+    whim_u32 keyval;
     whim_u8 keycode;
     whim_bool is_pressed;
 } WhimEventKey;
 
 typedef struct WhimEventClose {
     whim_u32 type;
-    whim_u32 window_id; // If it's 0, assume the whole app is to be closed
+    whim_u32 window_id;
 } WhimEventClose;
 
 // struct WhimMouseMotionEvent {};
@@ -170,4 +170,6 @@ void whimWinSetSize(WhimWin *window, WhimVec2 *size);
 void whimWinSetSizeLimits(WhimWin *window, WhimVec2 *min_size, WhimVec2 *max_size);
 void whimWinSetClearColor(WhimWin *window, WhimColor clear_color);
 whim_bool whimWinShouldClose(WhimWin *window);
+
+whim_u32 whimKeyvalToCodepoint(whim_u32 keyval);
 #endif

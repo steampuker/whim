@@ -70,14 +70,14 @@ enum {
 
 typedef struct WhimEventKey {
     whim_u32 type;
-    whim_u32 keysym;
+    whim_u32 keyval;
     whim_u8 keycode;
     whim_bool is_pressed;
 } WhimEventKey;
 
 typedef struct WhimEventClose {
     whim_u32 type;
-    whim_u32 window_id; // If it's 0, assume the whole app is to be closed
+    whim_u32 window_id;
 } WhimEventClose;
 
 // struct WhimMouseMotionEvent {};
@@ -172,6 +172,8 @@ void whimWinSetSizeLimits(WhimWin *window, WhimVec2 *min_size, WhimVec2 *max_siz
 void whimWinSetClearColor(WhimWin *window, WhimColor clear_color);
 whim_bool whimWinShouldClose(WhimWin *window);
 
+whim_u32 whimKeyvalToCodepoint(whim_u32 keyval);
+
 #ifdef WHIM_IMPLEMENTATION
 // NOTE: WHIM_API will be used in the future, for now it doesn't do anything
 #define WHIM_API(func, postfix) func
@@ -257,6 +259,60 @@ WHIM_UTIL whim_rb_index whimRingbufRead(WhimRingbuf *cursors, whim_size_t size) 
     return old_cursor;
 }
 
+WHIM_UTIL whim_u32 whim__keysymToCodepoint(whim_u32 keysym) {
+    static const whim_u32 codepoints[] = {0, 0xFF, 0xFEFFFFFF, 0x152, 0x153, 0x178};
+    whim_u32 calculated = keysym & codepoints[(keysym <= 255) | (!!(keysym & 0x1000000) << 1)];
+    if(calculated)
+        return calculated;
+
+    static const whim_u16 lookup[] = {
+        0x104, 0x2D8, 0x141, 0, 0x13D, 0x15A, 0, 0, 0x160, 0x15E, 0x164, 0x179, 0, 0x17D, 0x17B, 0, 0x105, 0x2DB, 0x142, 0, 0x13E, 0x15B, 0x2C7, 0, 0x161, 0x15F, 0x165, 0x17A, 0x2DD, 0x17E, 0x17C, 0x154, 0, 0, 0x102, 0, 0x139, 0x106, 0, 0x10C, 0, 0x118, 0, 0x11A, 0, 0, 0x10E, 0x110, 0x143, 0x147, 0, 0, 0x150,
+        0, 0, 0x158, 0x16E, 0, 0x170, 0, 0, 0x162, 0, 0x155, 0, 0, 0x103, 0, 0x13A, 0x107, 0, 0x10D, 0, 0x119, 0, 0x11B, 0, 0, 0x10F, 0x111, 0x144, 0x148, 0, 0, 0x151, 0, 0, 0x159, 0x16F, 0, 0x171, 0, 0, 0x163, 0x2D9, 0x126, 0, 0, 0, 0, 0x124, 0, 0, 0x130, 0, 0x11E,
+        0x134, 0, 0, 0, 0, 0x127, 0, 0, 0, 0, 0x125, 0, 0, 0x131, 0, 0x11F, 0x135, 0, 0, 0, 0, 0, 0, 0, 0, 0x10A, 0x108, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x120, 0, 0, 0x11C, 0, 0, 0, 0, 0x16C, 0x15C, 0, 0,
+        0, 0, 0, 0, 0x10B, 0x109, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x121, 0, 0, 0x11D, 0, 0, 0, 0, 0x16D, 0x15D, 0x138, 0x156, 0, 0x128, 0x13B, 0, 0, 0, 0x112, 0x122, 0x166, 0, 0, 0, 0, 0, 0, 0x157, 0, 0x129, 0x13C, 0, 0,
+        0, 0x113, 0x123, 0x167, 0x14A, 0, 0x14B, 0x100, 0, 0, 0, 0, 0, 0, 0x12E, 0, 0, 0, 0, 0x116, 0, 0, 0x12A, 0, 0x145, 0x14C, 0x136, 0, 0, 0, 0, 0, 0x172, 0, 0, 0, 0x168, 0x16A, 0, 0x101, 0, 0, 0, 0, 0, 0, 0x12F, 0, 0, 0, 0, 0x117, 0,
+        0, 0x12B, 0, 0x146, 0x14D, 0x137, 0, 0, 0, 0, 0, 0x173, 0, 0, 0, 0x169, 0x16B, 0x203E, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3002,
+        0x300C, 0x300D, 0x3001, 0x30FB, 0x30F2, 0x30A1, 0x30A3, 0x30A5, 0x30A7, 0x30A9, 0x30E3, 0x30E5, 0x30E7, 0x30C3, 0x30FC, 0x30A2, 0x30A4, 0x30A6, 0x30A8, 0x30AA, 0x30AB, 0x30AD, 0x30AF, 0x30B1, 0x30B3, 0x30B5, 0x30B7, 0x30B9, 0x30BB, 0x30BD, 0x30BF, 0x30C1, 0x30C4, 0x30C6, 0x30C8, 0x30CA, 0x30CB, 0x30CC, 0x30CD, 0x30CE, 0x30CF, 0x30D2, 0x30D5, 0x30D8, 0x30DB, 0x30DE, 0x30DF, 0x30E0, 0x30E1, 0x30E2, 0x30E4, 0x30E6, 0x30E8,
+        0x30E9, 0x30EA, 0x30EB, 0x30EC, 0x30ED, 0x30EF, 0x30F3, 0x309B, 0x309C, 0x60C, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x61B, 0, 0, 0, 0x61F, 0, 0x621, 0x622, 0x623, 0x624, 0x625, 0x626, 0x627, 0x628, 0x629, 0x62A, 0x62B, 0x62C, 0x62D, 0x62E, 0x62F, 0x630, 0x631, 0x632, 0x633, 0x634, 0x635, 0x636, 0x637,
+        0x638, 0x639, 0x63A, 0, 0, 0, 0, 0, 0x640, 0x641, 0x642, 0x643, 0x644, 0x645, 0x646, 0x647, 0x648, 0x649, 0x64A, 0x64B, 0x64C, 0x64D, 0x64E, 0x64F, 0x650, 0x651, 0x652, 0x452, 0x453, 0x451, 0x454, 0x455, 0x456, 0x457, 0x458, 0x459, 0x45A, 0x45B, 0x45C, 0x491, 0x45E, 0x45F, 0x2116, 0x402, 0x403, 0x401, 0x404, 0x405, 0x406, 0x407, 0x408, 0x409, 0x40A,
+        0x40B, 0x40C, 0x490, 0x40E, 0x40F, 0x44E, 0x430, 0x431, 0x446, 0x434, 0x435, 0x444, 0x433, 0x445, 0x438, 0x439, 0x43A, 0x43B, 0x43C, 0x43D, 0x43E, 0x43F, 0x44F, 0x440, 0x441, 0x442, 0x443, 0x436, 0x432, 0x44C, 0x44B, 0x437, 0x448, 0x44D, 0x449, 0x447, 0x44A, 0x42E, 0x410, 0x411, 0x426, 0x414, 0x415, 0x424, 0x413, 0x425, 0x418, 0x419, 0x41A, 0x41B, 0x41C, 0x41D, 0x41E,
+        0x41F, 0x42F, 0x420, 0x421, 0x422, 0x423, 0x416, 0x412, 0x42C, 0x42B, 0x417, 0x428, 0x42D, 0x429, 0x427, 0x42A, 0x386, 0x388, 0x389, 0x38A, 0x3AA, 0, 0x38C, 0x38E, 0x3AB, 0, 0x38F, 0, 0, 0x385, 0x2015, 0, 0x3AC, 0x3AD, 0x3AE, 0x3AF, 0x3CA, 0x390, 0x3CC, 0x3CD, 0x3CB, 0x3B0, 0x3CE, 0, 0, 0, 0, 0, 0x391, 0x392, 0x393, 0x394, 0x395,
+        0x396, 0x397, 0x398, 0x399, 0x39A, 0x39B, 0x39C, 0x39D, 0x39E, 0x39F, 0x3A0, 0x3A1, 0x3A3, 0, 0x3A4, 0x3A5, 0x3A6, 0x3A7, 0x3A8, 0x3A9, 0, 0, 0, 0, 0, 0, 0, 0x3B1, 0x3B2, 0x3B3, 0x3B4, 0x3B5, 0x3B6, 0x3B7, 0x3B8, 0x3B9, 0x3BA, 0x3BB, 0x3BC, 0x3BD, 0x3BE, 0x3BF, 0x3C0, 0x3C1, 0x3C3, 0x3C2, 0x3C4, 0x3C5, 0x3C6, 0x3C7, 0x3C8, 0x3C9, 0x23B7,
+        0x250C, 0x2500, 0x2320, 0x2321, 0x2502, 0x23A1, 0x23A3, 0x23A4, 0x23A6, 0x239B, 0x239D, 0x239E, 0x23A0, 0x23A8, 0x23AC, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x2264, 0x2260, 0x2265, 0x222B, 0x2234, 0x221D, 0x221E, 0, 0, 0x2207, 0, 0, 0x223C, 0x2243, 0, 0, 0, 0x21D4, 0x21D2, 0x2261, 0, 0, 0, 0, 0, 0, 0x221A,
+        0, 0, 0, 0x2282, 0x2283, 0x2229, 0x222A, 0x2227, 0x2228, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x2202, 0, 0, 0, 0, 0, 0, 0x192, 0, 0, 0, 0, 0x2190, 0x2191, 0x2192, 0x2193, 0x25C6, 0x2592, 0x2409, 0x240C, 0x240D, 0x240A, 0, 0, 0x2424, 0x240B, 0x2518, 0x2510, 0x250C,
+        0x2514, 0x253C, 0x23BA, 0x23BB, 0x2500, 0x23BC, 0x23BD, 0x251C, 0x2524, 0x2534, 0x252C, 0x2502, 0x2003, 0x2002, 0x2004, 0x2005, 0x2007, 0x2008, 0x2009, 0x200A, 0x2014, 0x2013, 0, 0x2423, 0, 0x2026, 0x2025, 0x2153, 0x2154, 0x2155, 0x2156, 0x2157, 0x2158, 0x2159, 0x215A, 0x2105, 0, 0, 0x2012, 0x2329, 0x2E, 0x232A, 0, 0, 0, 0, 0x215B, 0x215C, 0x215D, 0x215E, 0, 0, 0x2122,
+        0x2613, 0, 0x25C1, 0x25B7, 0x25CB, 0x25AF, 0x2018, 0x2019, 0x201C, 0x201D, 0x211E, 0x2030, 0x2032, 0x2033, 0, 0x271D, 0, 0x25AC, 0x25C0, 0x25B6, 0x25CF, 0x25AE, 0x25E6, 0x25AB, 0x25AD, 0x25B3, 0x25BD, 0x2606, 0x2022, 0x25AA, 0x25B2, 0x25BC, 0x261C, 0x261E, 0x2663, 0x2666, 0x2665, 0, 0x2720, 0x2020, 0x2021, 0x2713, 0x2717, 0x266F, 0x266D, 0x2642, 0x2640, 0x260E, 0x2315, 0x2117, 0x2038, 0x201A, 0x201E,
+        0x3C, 0, 0, 0x3E, 0, 0x2228, 0x2227, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xAF, 0, 0x22A4, 0x2229, 0x230A, 0, 0x5F, 0, 0, 0, 0x2218, 0, 0x2395, 0, 0x22A5, 0x25CB, 0, 0, 0, 0x2308, 0, 0, 0x222A, 0,
+        0x2283, 0, 0x2282, 0, 0x22A3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x22A2, 0x2017, 0x5D0, 0x5D1, 0x5D2, 0x5D3, 0x5D4, 0x5D5, 0x5D6, 0x5D7, 0x5D8, 0x5D9, 0x5DA, 0x5DB, 0x5DC, 0x5DD, 0x5DE,
+        0x5DF, 0x5E0, 0x5E1, 0x5E2, 0x5E3, 0x5E4, 0x5E5, 0x5E6, 0x5E7, 0x5E8, 0x5E9, 0x5EA, 0x3131, 0x3132, 0x3133, 0x3134, 0x3135, 0x3136, 0x3137, 0x3138, 0x3139, 0x313A, 0x313B, 0x313C, 0x313D, 0x313E, 0x313F, 0x3140, 0x3141, 0x3142, 0x3143, 0x3144, 0x3145, 0x3146, 0x3147, 0x3148, 0x3149, 0x314A, 0x314B, 0x314C, 0x314D, 0x314E, 0x314F, 0x3150, 0x3151, 0x3152, 0x3153, 0x3154, 0x3155, 0x3156, 0x3157, 0x3158, 0x3159,
+        0x315A, 0x315B, 0x315C, 0x315D, 0x315E, 0x315F, 0x3160, 0x3161, 0x3162, 0x3163, 0x11A8, 0x11A9, 0x11AA, 0x11AB, 0x11AC, 0x11AD, 0x11AE, 0x11AF, 0x11B0, 0x11B1, 0x11B2, 0x11B3, 0x11B4, 0x11B5, 0x11B6, 0x11B7, 0x11B8, 0x11B9, 0x11BA, 0x11BB, 0x11BC, 0x11BD, 0x11BE, 0x11BF, 0x11C0, 0x11C1, 0x11C2, 0x316D, 0x3171, 0x3178, 0x317F, 0x3181, 0x3184, 0x3186, 0x318D, 0x318E, 0x11EB, 0x11F0, 0x11F9, 0, 0, 0, 0, 0x20A9
+    };
+
+    static const whim_i16 pairs[16][2] = { 0, 0, ~0xa0, 0x5f, ~0x41, 0xbd, 0x1b, 0x11a, 0x9c, 0x17c, 0xd0, 0x1c3, 0x122, 0x222, 0x181, 0x27b, 0x1da, 0x2d9, 0x1f9, 0x2f2, 0x251, 0x350, 0x2ad, 0x3aa, 0x2cb, 0x3c6, 0, 0, 0x325, 0x425 };
+    whim_u32 index = (keysym & ~0xFF) >> 8;
+
+    calculated = keysym & 0xFF;
+    switch(index) {
+        case 0xD: return keysym + 96;
+        case 0x13: keysym -= 0x13b9; return keysym <= 6 ? codepoints[keysym] : 0;
+        case 0x20: return keysym;
+        case 0xFF:
+            if(calculated >= 0xAA && calculated <= 0xB9 || calculated == 0xBD)
+                 return keysym - 0xFF80;
+            switch(calculated) {
+                case 8: case 9: case 10: case 11: case 13: case 0x1b: return calculated;
+                case 0x80: return 0x20;
+                case 0x89: return 9;
+                case 0x8d: return 13;
+                case 0xFF: return 0x7F;
+            }
+    }
+
+    index &= 0xF;
+    calculated += pairs[index][0];
+    return (calculated < pairs[index][1]) ? lookup[calculated] : 0;
+}
+
 // X11 Backend
 #include <unistd.h>
 #include <dlfcn.h>
@@ -285,7 +341,11 @@ struct WhimXcbHook {
     void *connection;
     whim_u32 file_desc;
 
-    whim_u8 xkb;
+    whim_u8 xkb, xkb_event;
+    struct WhimXkbState {
+        WhimUnit *map_ptr, *syms, *types;
+        whim_u16 type_indices[256], syms_indices[248];
+    } xkb_keymap;
 };
 
 static struct WhimX11State {
@@ -387,6 +447,7 @@ WHIM_UTIL void x11RoundtripExtensions(struct WhimXcbHook *hook)
             break;
 
         whim_u8 opcode = xkb_receiver[2].as_8[1];
+        whim_u8 first_event = xkb_receiver[2].as_8[2];
 
         WhimTypedUnit(whim_u16) buffer[2] = {0, WHIM_ARRLEN(buffer), XKB_MAJOR, XKB_MINOR};
         buffer->as_8[0] = opcode, buffer->as_8[1] = 0;
@@ -402,55 +463,11 @@ WHIM_UTIL void x11RoundtripExtensions(struct WhimXcbHook *hook)
             break;
 
         hook->xkb = opcode;
+        hook->xkb_event = first_event;
 
         if(!whimPollReceive(hook->file_desc, xkb_receiver, sizeof xkb_receiver) || !xkb_receiver->as_8[0] || !xkb_receiver[2].as_8[0])
             break;
     } while(0);
-}
-
-WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
-{
-    WHIM_ASSERT(whim_core.allocator.alloc, "Core functions are not defined, initialize whim_core");
-    if(!(x11.lib = dlopen("libxcb.so.1", RTLD_LAZY | RTLD_LOCAL)))
-        return WHIM_FALSE;
-
-    x11.connect = dlsym(x11.lib, "xcb_connect");
-    x11.disconnect = dlsym(x11.lib, "xcb_disconnect");
-
-    int (*hasError)(void*) = dlsym(x11.lib, "xcb_connection_has_error");
-
-    int screen;
-    whim_u32* root_window_ptr;
-
-    x11.hook.connection = x11.connect(0, &screen);
-    if(hasError(x11.hook.connection) || !(root_window_ptr = x11ScreenOfDisplay(x11.hook.connection, screen)))
-        return whimDeinit(), WHIM_FALSE;
-
-    x11.sendRequest = dlsym(x11.lib, "xcb_send_request");
-    x11.flush = dlsym(x11.lib, "xcb_flush");
-
-    // Ensure this is in the same order as x11.atoms
-    X11_INTERN_ATOM("WM_PROTOCOLS"), X11_INTERN_ATOM("WM_DELETE_WINDOW"), X11_INTERN_ATOM("_NET_WM_NAME"), X11_INTERN_ATOM("UTF8_STRING");
-    X11_QUERY_EXT("XKEYBOARD"); // "RANDR"
-
-    x11.flush(x11.hook.connection);
-
-    int (*getFileDesc)(void*) = dlsym(x11.lib, "xcb_get_file_descriptor");
-    x11.checkEventQueue = dlsym(x11.lib, "xcb_poll_for_event");
-    x11.generateID = dlsym(x11.lib, "xcb_generate_id");
-    x11.getReply = dlsym(x11.lib, "xcb_wait_for_reply");
-
-#ifndef EXIT_SUCCESS
-    x11Free = dlsym(x11.lib, "free");
-#endif
-
-    x11.hook.file_desc = getFileDesc(x11.hook.connection);
-    x11.root_window = *root_window_ptr;
-
-    x11RoundtripAtoms(x11.hook.file_desc);
-    x11RoundtripExtensions(&x11.hook);
-
-    return WHIM_TRUE;
 }
 
 enum { X11_WIN_BACKGROUND = 2, X11_WIN_EVENTS = 2048, X11_EVENT_KEY_PRESS = 1, X11_EVENT_KEY_RELEASE = 2};
@@ -510,6 +527,175 @@ WHIM_UTIL void x11ChangeProperty(WhimWin *WHIM_NOALIAS win, whim_u32 property, w
     whimXcbSendRequestMix(x11.hook.connection, WHIM_ARRLEN(payloads), payloads, lengths);
 }
 
+WHIM_UTIL void xkbSelectEvents(void)
+{
+    WhimUnit buffer[5] = {x11.hook.xkb, 1}; // SelectEvents
+    buffer->as_16[1] = WHIM_ARRLEN(buffer); // length
+    buffer[1].as_16[0] = 256; // deviceSpec
+
+    buffer[1].as_16[1] = 2; // MapNotify
+    buffer[3].as_16[0] = buffer[3].as_16[1] = 2; // KeyType + KeySym
+
+    whimXcbSendRequest(x11.hook.connection, buffer, sizeof buffer);
+}
+
+WHIM_UTIL void xkbInitMap(void)
+{
+    WhimTypedUnit(whim_u16) buffer[7] = {0, WHIM_ARRLEN(buffer), 256, 1 | 2};
+    buffer->as_8[0] = x11.hook.xkb, buffer->as_8[1] = 8;
+
+    int seq = whimXcbSendRequest(x11.hook.connection, buffer, sizeof buffer);
+    x11.flush(x11.hook.connection);
+
+    x11Free(x11.hook.xkb_keymap.map_ptr);
+
+    WhimUnit *receiver = x11.getReply(x11.hook.connection, seq, 0);
+    x11.hook.xkb_keymap.map_ptr = receiver;
+
+    whim_u32 types_len = receiver[3].as_8[3];
+
+    WhimUnit *cursor = x11.hook.xkb_keymap.types = receiver + 10;
+    for(whim_u32 i = 0, index = 0; i < types_len; ++i) {
+        x11.hook.xkb_keymap.type_indices[i] = index;
+        cursor = x11.hook.xkb_keymap.types + (index += 2 + cursor[1].as_8[1] * (2 + cursor[1].as_8[2]));
+    }
+
+    x11.hook.xkb_keymap.syms = cursor;
+
+    whim_u32 syms_len = receiver[5].as_8[0];
+    for(whim_u32 i = 0, index = 0; i < syms_len; ++i) {
+        WHIM_ASSERT(((whim_u16)cursor[1].as_8[0] * cursor[1].as_8[1]) == cursor[1].as_16[1], "Size mismatch, wrong indices");
+        x11.hook.xkb_keymap.syms_indices[i] = index;
+        cursor = x11.hook.xkb_keymap.syms + (index += cursor[1].as_16[1] + 2);
+    }
+}
+
+WHIM_UTIL whim_bool xkbIsAlphabetic(whim_u32 k)
+{
+    static const whim_u64 latin[] = { 0x3FFFFFFULL, 0xC000000000000000ULL, 0x7FBFFFFFULL, 0, 0, 0x800000006F350000ULL, 0x2593CAB4ULL, 0, 0, 0xD210000ULL, 0x30900030ULL, 0, 0, 0x800000004E340002ULL, 0x31074840ULL};
+    static const whim_u64 cyrgr[] = { 0x7FFFFFFF80007FFFULL, 0, 0, 0, 0x7FF0000ULL, 0x1FFFFFFULL};
+    static const whim_u64 misc1[] = { 0x1ULL, 0x10000000000500ULL, 0x400002000000208ULL, 0, 0x100000000000ULL, 0x2000000100ULL};
+    static const whim_u64 misc2[] = { 0x15150010511ULL, 0x10410040ULL, 0, 0xFFFFFFFFFC000ULL };
+    static const whim_u64 misc3[] = { 0x4010000010000101ULL, 0x4000010040100000ULL, 0x5555555540000105ULL, 0x55555555555555ULL };
+
+    enum { BIT_BOUND = sizeof(whim_u64) * 8, OFFSET_LATIN = 0x61, OFFSET_CYRGR = 0x6A1, OFFSET_MISC1 = 0x100012D, OFFSET_MISC2 = 0x1000493, OFFSET_MISC3 = 0x1001E03 };
+    whim_u32 group = (k - OFFSET_LATIN < WHIM_ARRLEN(latin) * BIT_BOUND) << 0 |
+                     (k - OFFSET_CYRGR < WHIM_ARRLEN(cyrgr) * BIT_BOUND) << 1 |
+                     (k - OFFSET_MISC1 < WHIM_ARRLEN(misc1) * BIT_BOUND) << 2 |
+                     (k - OFFSET_MISC2 < WHIM_ARRLEN(misc2) * BIT_BOUND) << 3 |
+                     (k - OFFSET_MISC3 < WHIM_ARRLEN(misc3) * BIT_BOUND) << 4;
+
+    const whim_u64* result;
+    switch(group) {
+        case 0x1:  k -= OFFSET_LATIN; result = latin; break;
+        case 0x2:  k -= OFFSET_CYRGR; result = cyrgr; break;
+        case 0x4:  k -= OFFSET_MISC1; result = misc1; break;
+        case 0x8:  k -= OFFSET_MISC2; result = misc2; break;
+        case 0x10: k -= OFFSET_MISC3; result = misc3; break;
+        default: return 0;
+    }
+
+    return result[k / BIT_BOUND] >> k % BIT_BOUND & 1;
+}
+
+WHIM_UTIL whim_u8 xkbGetShiftLevel(whim_u32 kt_index, whim_u8 width, whim_u8 modifiers)
+{
+    whim_u32 level = 0;
+    WhimUnit *cursor = x11.hook.xkb_keymap.types + x11.hook.xkb_keymap.type_indices[kt_index];
+
+    whim_u8 current_mods = modifiers & cursor->as_8[0];
+
+    for(int i = 0; i < cursor[1].as_8[1]; ++i)
+        if(cursor[2 + i].as_8[0] && (cursor[2 + i].as_8[2] == current_mods)) {
+            level = cursor[2 + i].as_8[1] % width;
+            break;
+        }
+
+    return level;
+}
+
+WHIM_UTIL whim_u32 xkbKeycodeToKeysym(whim_u32 keycode, whim_u16 state)
+{
+    whim_u8 group = state >> 0xD;
+    whim_u8 modifiers = state & 0xFF;
+    WhimUnit *keysyms = x11.hook.xkb_keymap.syms + x11.hook.xkb_keymap.syms_indices[keycode];
+
+    whim_u8 group_info = keysyms[1].as_8[0];
+    whim_u8 width = keysyms[1].as_8[1];
+
+    whim_u8 num_groups = group_info & 0xF;
+
+    switch((group >= num_groups) << (group_info >> 6)) {
+        case 0: break;
+        case 2:  group = num_groups - 1; break;
+        case 4:  group = (group_info & 0x30) / 16; break;
+        default: group %= num_groups; break;
+    }
+
+    whim_u8 kt_index = keysyms->as_8[group];
+    const WhimUnit *current_keysym = &keysyms[group * width + 2];
+    whim_u32 level = xkbGetShiftLevel(kt_index, width, modifiers);
+
+    WHIM_ASSERT(keysyms[1].as_16[1] >= group * width + level, "keycodeToKeysym: Out of bounds");
+
+    if(level == 0 && !(modifiers & 1))
+        level |= ((modifiers & 0x2) && xkbIsAlphabetic(current_keysym[level].as_32)) | ((modifiers & 0x10) && ((current_keysym->as_32 - 0xFF95) <= 0xA));
+
+    return current_keysym[level].as_32;
+}
+
+WHIM_API(whim_bool whimInit, X11)(enum WhimInitFlags flags)
+{
+    WHIM_ASSERT(whim_core.allocator.alloc, "Core functions are not defined, initialize whim_core");
+    if(!(x11.lib = dlopen("libxcb.so.1", RTLD_LAZY | RTLD_LOCAL)))
+        return WHIM_FALSE;
+
+    x11.connect = dlsym(x11.lib, "xcb_connect");
+    x11.disconnect = dlsym(x11.lib, "xcb_disconnect");
+
+    int (*hasError)(void*) = dlsym(x11.lib, "xcb_connection_has_error");
+
+    int screen;
+    whim_u32* root_window_ptr;
+
+    x11.hook.connection = x11.connect(0, &screen);
+    if(hasError(x11.hook.connection) || !(root_window_ptr = x11ScreenOfDisplay(x11.hook.connection, screen)))
+        return whimDeinit(), WHIM_FALSE;
+
+    x11.sendRequest = dlsym(x11.lib, "xcb_send_request");
+    x11.flush = dlsym(x11.lib, "xcb_flush");
+
+    // Ensure this is in the same order as x11.atoms
+    X11_INTERN_ATOM("WM_PROTOCOLS"), X11_INTERN_ATOM("WM_DELETE_WINDOW"), X11_INTERN_ATOM("_NET_WM_NAME"), X11_INTERN_ATOM("UTF8_STRING");
+    X11_QUERY_EXT("XKEYBOARD"); // "RANDR"
+
+    x11.flush(x11.hook.connection);
+
+    int (*getFileDesc)(void*) = dlsym(x11.lib, "xcb_get_file_descriptor");
+    x11.checkEventQueue = dlsym(x11.lib, "xcb_poll_for_event");
+    x11.generateID = dlsym(x11.lib, "xcb_generate_id");
+    x11.getReply = dlsym(x11.lib, "xcb_wait_for_reply");
+
+#ifndef EXIT_SUCCESS
+    x11Free = dlsym(x11.lib, "free");
+#endif
+
+    x11.hook.file_desc = getFileDesc(x11.hook.connection);
+    x11.root_window = *root_window_ptr;
+
+    x11RoundtripAtoms(x11.hook.file_desc), x11RoundtripExtensions(&x11.hook);
+
+    if(x11.hook.xkb)
+        xkbSelectEvents(), xkbInitMap();
+
+    return WHIM_TRUE;
+}
+
+WHIM_API(void whimDeinit, X11)(void)
+{
+    return x11.lib ? (x11.disconnect(x11.hook.connection), dlclose(x11.lib), x11.lib = 0) : (void)0;
+}
+
 WHIM_API(WhimWin* whimWinCreate, X11)(WhimRect *rect, const char *title, WhimColor *clear_color, enum WhimWinFlags flags)
 {
     WhimWin* win = whim_core.allocator.alloc(whim_core.allocator.context, sizeof *win);
@@ -552,23 +738,16 @@ WHIM_API(void whimWinDestroy, X11)(WhimWin *win)
     whim_core.allocator.free(whim_core.allocator.context, win, sizeof *win);
 }
 
-WHIM_API(void whimDeinit, X11)(void)
-{
-    return x11.lib ? (x11.disconnect(x11.hook.connection), dlclose(x11.lib), x11.lib = 0) : (void)0;
-}
-
 WHIM_UTIL void whimParseX11Event(WhimUnit receiver[], WhimEvent *event)
 {
-    switch(receiver->as_8[0] & (whim_u8)~0x80) { enum {KEY_PRESS = 2, KEY_RELEASE = 3, CLIENT_MESSAGE = 33};
+    whim_u32 event_type = receiver->as_8[0] & (whim_u8)~0x80;
+    switch(event_type) { enum {KEY_PRESS = 2, KEY_RELEASE = 3, CLIENT_MESSAGE = 33};
     case KEY_PRESS:
-        event->type = WHIM_EVENT_KEY;
-        event->as_key.keycode = receiver->as_8[1] - 8;
-        event->as_key.is_pressed = WHIM_TRUE;
-        return;
     case KEY_RELEASE:
         event->type = WHIM_EVENT_KEY;
         event->as_key.keycode = receiver->as_8[1] - 8;
-        event->as_key.is_pressed = WHIM_FALSE;
+        event->as_key.keyval = xkbKeycodeToKeysym(event->as_key.keycode, receiver[7].as_16[0]);
+        event->as_key.is_pressed = (event_type == KEY_PRESS);
         return;
     case CLIENT_MESSAGE:
         if(receiver[3].as_32 != x11.atoms.values.close)
@@ -579,6 +758,11 @@ WHIM_UTIL void whimParseX11Event(WhimUnit receiver[], WhimEvent *event)
         return;
     }
 
+    if(event_type == x11.hook.xkb_event) switch(receiver->as_8[1])
+        case 1: { /* Doesn't work for now */
+            // xkbInitMap();
+        }
+
     event->type = WHIM_EVENT_NONE;
 }
 
@@ -588,28 +772,7 @@ WHIM_API(void whimPollEvents, X11)(WhimEvent *event)
     return queued_event ? (whimParseX11Event(queued_event, event), x11Free(queued_event)) : (event->type = WHIM_EVENT_NONE);
 }
 
-/*
-WHIM_UTIL char* x11GetAtomName(whim_u32 atom, whim_u32 *length) {
-    WhimTypedUnit(whim_u8) buffer[2] = {17};
-    buffer->as_16[1] = WHIM_ARRLEN(buffer);
-    buffer[1].as_32 = atom;
-
-    int seq = whimXcbSendRequest(x11.hook.connection, buffer, sizeof buffer);
-    x11.flush(x11.hook.connection);
-
-    WhimUnit *reply = x11.getReply(x11.hook.connection, seq, 0);
-    if(!reply)
-        return 0;
-
-    *length = reply[2].as_16[0];
-
-    WhimUnit* ret = whim_core.allocator.alloc(whim_core.allocator.context, *length);
-    whim_core.memcpy(reply + 8, ret, *length);
-
-    x11Free(reply);
-    return (char*)ret;
-}
-*/
+WHIM_API(whim_u32 whimKeyvalToCodepoint, X11)(whim_u32 keyval) { return whim__keysymToCodepoint(keyval); }
 #endif
 
 #endif
